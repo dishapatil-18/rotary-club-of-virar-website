@@ -1,0 +1,32 @@
+# Environment file (contains credentials)
+.env
+
+# Runtime logs
+logs/*.txt
+
+# Uploaded files (user-generated content)
+uploads/
+assets/uploads/
+
+# Keep .htaccess (deny rules)
+!uploads/.htaccess
+!assets/uploads/.htaccess
+
+# IDE / OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Dependencies (vendor packages)
+vendor/
+
+# Composer lock file
+composer.lock
+
+# Temporary / runtime directories
+sessions/
+tmp/
