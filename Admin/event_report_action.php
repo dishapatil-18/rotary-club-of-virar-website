@@ -9,7 +9,15 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 
+// Role-based access
+$allowedRoles = ['super_admin', 'President', 'Secretary', 'Treasurer'];
+if (!isset($_SESSION['admin_role']) || !in_array($_SESSION['admin_role'], $allowedRoles)) {
+    header("Location: dashboard.php");
+    exit;
+}
+
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 
 // --- Initialize variables ---
 $editMode = false;
@@ -72,6 +80,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param("iss", $event_id, $details, $submitted_by);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Events', 'Event Report Added', 'Added event report for event ID ' . $event_id . '.', 'INFO', 'success');
         echo "<script>alert('✅ Report added successfully!'); window.location.href='event_report_action.php';</script>";
         exit;
     }
@@ -88,6 +97,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param("issi", $event_id, $details, $submitted_by, $rid);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Events', 'Event Report Updated', 'Updated event report ID ' . $rid . '.', 'INFO', 'success');
         echo "<script>alert('✅ Report updated successfully!'); window.location.href='event_report_action.php';</script>";
         exit;
     }
@@ -102,6 +112,7 @@ if (isset($_GET['delete'])) {
     $stmt->bind_param("i", $del_id);
     $stmt->execute();
     $stmt->close();
+    logAudit($conn, 'Events', 'Event Report Deleted', 'Deleted event report ID ' . $del_id . '.', 'WARNING', 'success');
 
     echo "<script>alert('🗑️ Report deleted successfully!'); window.location.href='event_report_action.php';</script>";
     exit;

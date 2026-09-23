@@ -2,11 +2,12 @@
 session_start();
 if (!isset($_SESSION['admin_id'])) { header("Location: ../login.php"); exit; }
 require_once __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 require_once __DIR__ . '/admin_functions.php';
-require_once __DIR__ . '/../includes/send_email.php';
+require_once __DIR__ . '/../includes/communication_engine.php';
 
-if (!isSuperAdmin()) {
-    echo "<script>alert('Access denied. Super Admin only.'); window.location.href='dashboard.php';</script>";
+if (!isContactMessagesAllowed()) {
+    echo "<script>alert('Access denied.'); window.location.href='dashboard.php';</script>";
     exit;
 }
 
@@ -14,22 +15,38 @@ if (!isSuperAdmin()) {
 $tableCheck = $conn->query("SHOW TABLES LIKE 'contact_messages'");
 if ($tableCheck && $tableCheck->num_rows === 0) {
     $conn->query("CREATE TABLE contact_messages (
-        id INT AUTO_INCREMENT PRIMARY KEY,
+        message_id INT AUTO_INCREMENT PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         email VARCHAR(255) NOT NULL,
         subject VARCHAR(255) NOT NULL,
         message TEXT NOT NULL,
-        status ENUM('Unread','Read','Replied','Archived') NOT NULL DEFAULT 'Unread',
-        submitted_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        status ENUM('new','read','replied') NOT NULL DEFAULT 'new',
+        submitted_on TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 }
 
-// Auto-migrate: add status column if missing, migrate is_read data
+// Auto-migrate: add status column if missing
 $colCheck = $conn->query("SHOW COLUMNS FROM contact_messages LIKE 'status'");
 if ($colCheck && $colCheck->num_rows === 0) {
-    $conn->query("ALTER TABLE contact_messages ADD COLUMN status ENUM('Unread','Read','Replied','Archived') NOT NULL DEFAULT 'Unread' AFTER is_read");
-    $conn->query("UPDATE contact_messages SET status = 'Read' WHERE is_read = 1 AND status = 'Unread'");
-    $conn->query("ALTER TABLE contact_messages DROP COLUMN is_read");
+    $conn->query("ALTER TABLE contact_messages ADD COLUMN status ENUM('new','read','replied') NOT NULL DEFAULT 'new'");
+}
+
+// Auto-migrate: add tracking columns if missing
+$seenByCheck = $conn->query("SHOW COLUMNS FROM contact_messages LIKE 'seen_by'");
+if ($seenByCheck && $seenByCheck->num_rows === 0) {
+    $conn->query("ALTER TABLE contact_messages ADD COLUMN seen_by VARCHAR(255) DEFAULT NULL AFTER status");
+}
+$seenAtCheck = $conn->query("SHOW COLUMNS FROM contact_messages LIKE 'seen_at'");
+if ($seenAtCheck && $seenAtCheck->num_rows === 0) {
+    $conn->query("ALTER TABLE contact_messages ADD COLUMN seen_at DATETIME DEFAULT NULL AFTER seen_by");
+}
+$repliedByCheck = $conn->query("SHOW COLUMNS FROM contact_messages LIKE 'replied_by'");
+if ($repliedByCheck && $repliedByCheck->num_rows === 0) {
+    $conn->query("ALTER TABLE contact_messages ADD COLUMN replied_by VARCHAR(255) DEFAULT NULL AFTER seen_at");
+}
+$repliedAtCheck = $conn->query("SHOW COLUMNS FROM contact_messages LIKE 'replied_at'");
+if ($repliedAtCheck && $repliedAtCheck->num_rows === 0) {
+    $conn->query("ALTER TABLE contact_messages ADD COLUMN replied_at DATETIME DEFAULT NULL AFTER replied_by");
 }
 
 $message = '';
@@ -41,115 +58,105 @@ $error   = '';
 $viewMessage = null;
 if (isset($_GET['view']) && ctype_digit($_GET['view'])) {
     $vid = (int)$_GET['view'];
-    $stmt = $conn->prepare("SELECT * FROM contact_messages WHERE id = ?");
+    $stmt = $conn->prepare("SELECT * FROM contact_messages WHERE message_id = ?");
     $stmt->bind_param("i", $vid);
     $stmt->execute();
     $res = $stmt->get_result();
     $viewMessage = $res->fetch_assoc();
     $stmt->close();
-    if ($viewMessage && $viewMessage['status'] === 'Unread') {
-        $conn->query("UPDATE contact_messages SET status = 'Read' WHERE id = $vid");
-        $viewMessage['status'] = 'Read';
+    if ($viewMessage && $viewMessage['status'] === 'new') {
+        $updates = ["status = 'read'"];
+        if ($viewMessage['seen_by'] === null) {
+            $updates[] = "seen_by = '" . $conn->real_escape_string($_SESSION['admin_name']) . "'";
+            $viewMessage['seen_by'] = $_SESSION['admin_name'];
+        }
+        if ($viewMessage['seen_at'] === null) {
+            $updates[] = "seen_at = NOW()";
+            $viewMessage['seen_at'] = date('Y-m-d H:i:s');
+        }
+        $conn->query("UPDATE contact_messages SET " . implode(', ', $updates) . " WHERE message_id = $vid");
+        logAudit($conn, 'Contact Messages', 'Message Read', 'Viewed contact message #' . $vid . ' from "' . ($viewMessage['name'] ?? '') . '".', 'INFO', 'success');
+        $viewMessage['status'] = 'read';
     }
 }
 
 // Mark as read
 if (isset($_GET['read']) && ctype_digit($_GET['read'])) {
     $rid = (int)$_GET['read'];
-    $conn->query("UPDATE contact_messages SET status = 'Read' WHERE id = $rid");
-    header("Location: contact_messages.php");
-    exit;
-}
-
-// Archive
-if (isset($_GET['archive']) && ctype_digit($_GET['archive'])) {
-    $aid = (int)$_GET['archive'];
-    $conn->query("UPDATE contact_messages SET status = 'Archived' WHERE id = $aid");
+    $conn->query("UPDATE contact_messages SET status = 'read' WHERE message_id = $rid");
+    logAudit($conn, 'Contact Messages', 'Message Read', 'Marked message #' . $rid . ' as read.', 'INFO', 'success');
     header("Location: contact_messages.php");
     exit;
 }
 
 // Delete (Super Admin only)
 if (isset($_GET['delete']) && ctype_digit($_GET['delete'])) {
-    $did = (int)$_GET['delete'];
-    $stmt = $conn->prepare("DELETE FROM contact_messages WHERE id = ?");
-    $stmt->bind_param("i", $did);
-    if ($stmt->execute()) {
-        $message = 'Message deleted permanently.';
+    if (!isSuperAdmin()) {
+        $error = 'Access denied. Only Super Admin can delete messages.';
     } else {
-        $error = 'Failed to delete message.';
+        $did = (int)$_GET['delete'];
+        $stmt = $conn->prepare("DELETE FROM contact_messages WHERE message_id = ?");
+        $stmt->bind_param("i", $did);
+        if ($stmt->execute()) {
+            $message = 'Message deleted permanently.';
+            logAudit($conn, 'Contact Messages', 'Message Deleted', 'Deleted contact message #' . $did . '.', 'WARNING', 'success');
+        } else {
+            $error = 'Failed to delete message.';
+        }
+        $stmt->close();
     }
-    $stmt->close();
 }
 
-// Reply via email
+// Reply via email — redirect to Email Composer
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'reply') {
-    $replyId    = (int)$_POST['message_id'];
-    $replyBody  = trim($_POST['reply_body'] ?? '');
+    $replyId = (int)$_POST['message_id'];
+    $replyBody = trim($_POST['reply_body'] ?? '');
     $replySubject = trim($_POST['reply_subject'] ?? '');
+    $composerParams = [
+        'module'     => 'Contact Messages',
+        'action'     => 'Message Replied',
+        'message_id' => $replyId,
+        'skip_url'   => 'contact_messages.php',
+    ];
+    if ($replyBody !== '') $composerParams['body'] = $replyBody;
+    if ($replySubject !== '') $composerParams['subject'] = $replySubject;
+    header("Location: " . commComposerUrl($composerParams));
+    exit;
+}
 
-    if ($replyBody === '' || $replySubject === '') {
-        $error = 'Please provide both subject and reply message.';
-    } else {
-        $stmt = $conn->prepare("SELECT name, email, subject FROM contact_messages WHERE id = ?");
-        $stmt->bind_param("i", $replyId);
-        $stmt->execute();
-        $msgData = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-
-        if ($msgData) {
-            $fullBody = "
-                <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;'>
-                    <div style='text-align: center; margin-bottom: 20px;'>
-                        <h2 style='color: #0A2342;'>Rotary Club of Virar</h2>
-                    </div>
-                    <div style='background: #f8fafc; border-radius: 12px; padding: 24px; border: 1px solid #e2e8f0;'>
-                        <p>Dear " . htmlspecialchars($msgData['name']) . ",</p>
-                        " . nl2br(htmlspecialchars($replyBody)) . "
-                        <hr style='border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;'>
-                        <p style='color: #94a3b8; font-size: 13px;'>
-                            <strong>Original Message:</strong><br>
-                            Subject: " . htmlspecialchars($msgData['subject']) . "
-                        </p>
-                    </div>
-                    <div style='text-align: center; margin-top: 20px; color: #94a3b8; font-size: 12px;'>
-                        <p>Rotary Club of Virar &bull; Service Above Self</p>
-                    </div>
-                </div>
-            ";
-
-            $sendResult = sendEmail($msgData['email'], $replySubject, $fullBody);
-            if ($sendResult['success']) {
-                $conn->query("UPDATE contact_messages SET status = 'Replied' WHERE id = $replyId");
-                $message = 'Reply sent successfully to ' . htmlspecialchars($msgData['email']) . '.';
-            } else {
-                $error = 'Failed to send email. Check SMTP configuration.';
-            }
-        } else {
-            $error = 'Message not found.';
-        }
-    }
+// Reply opened but skipped (Email Composer Skip button)
+if (isset($_GET['skip_log']) && ctype_digit($_GET['skip_log'])) {
+    $skipId = (int)$_GET['skip_log'];
+    logAudit($conn, 'Contact Messages', 'Contact Message Reply Opened (Email Skipped)', 'Admin opened reply for message #' . $skipId . ' but skipped sending email.', 'INFO', 'success');
+    header("Location: contact_messages.php");
+    exit;
 }
 
 // ─── STATS ───
 $totalMessages   = $conn->query("SELECT COUNT(*) as c FROM contact_messages")->fetch_assoc()['c'] ?? 0;
-$unreadMessages  = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'Unread'")->fetch_assoc()['c'] ?? 0;
-$readMessages    = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'Read'")->fetch_assoc()['c'] ?? 0;
-$repliedMessages = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'Replied'")->fetch_assoc()['c'] ?? 0;
-$archivedMessages = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'Archived'")->fetch_assoc()['c'] ?? 0;
+$unreadMessages  = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'new'")->fetch_assoc()['c'] ?? 0;
+$readMessages    = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'read'")->fetch_assoc()['c'] ?? 0;
+$repliedMessages = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'replied'")->fetch_assoc()['c'] ?? 0;
 
 // ─── FILTERS & SEARCH ───
 $filter = $_GET['filter'] ?? 'all';
 $search = trim($_GET['search'] ?? '');
+
+$statusFilterMap = ['Unread' => 'new', 'Read' => 'read', 'Replied' => 'replied'];
 
 $where = '';
 $params = [];
 $types = '';
 
 if ($filter !== 'all') {
-    $where = "WHERE status = ?";
-    $params[] = $filter;
-    $types .= 's';
+    $dbFilter = $statusFilterMap[$filter] ?? null;
+    if ($dbFilter) {
+        $where = "WHERE status = ?";
+        $params[] = $dbFilter;
+        $types .= 's';
+    } else {
+        $filter = 'all';
+    }
 }
 
 if ($search !== '') {
@@ -165,7 +172,7 @@ if ($search !== '') {
     $types .= 'sss';
 }
 
-$sql = "SELECT * FROM contact_messages $where ORDER BY submitted_at DESC";
+$sql = "SELECT * FROM contact_messages $where ORDER BY submitted_on DESC";
 $stmt = $conn->prepare($sql);
 if ($params) {
     $stmt->bind_param($types, ...$params);
@@ -174,16 +181,8 @@ $stmt->execute();
 $messagesList = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 $stmt->close();
 
-// ─── REPLY FORM DATA (if coming from reply link) ───
+// ─── REPLY FORM DATA (no longer used — redirects to Email Composer) ───
 $replyMessage = null;
-if (isset($_GET['reply']) && ctype_digit($_GET['reply'])) {
-    $rid = (int)$_GET['reply'];
-    $stmt = $conn->prepare("SELECT * FROM contact_messages WHERE id = ?");
-    $stmt->bind_param("i", $rid);
-    $stmt->execute();
-    $replyMessage = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-}
 ?>
 <?php
 $pageTitle = 'Contact Messages';
@@ -217,10 +216,6 @@ require __DIR__ . '/includes/admin_header.php';
         <div class="stat-value" style="font-size:22px;color:#8b5cf6;"><?= $repliedMessages ?></div>
         <div class="stat-label">Replied</div>
     </div>
-    <div class="stat-card fade-in" style="border-left:4px solid #64748b;animation-delay:0.2s;">
-        <div class="stat-value" style="font-size:22px;color:#64748b;"><?= $archivedMessages ?></div>
-        <div class="stat-label">Archived</div>
-    </div>
 </div>
 
 <!-- ─── FILTER & SEARCH BAR ─── -->
@@ -232,7 +227,7 @@ require __DIR__ . '/includes/admin_header.php';
                 <a href="contact_messages.php?filter=Unread<?= $search ? '&search='.urlencode($search) : '' ?>" class="btn <?= $filter === 'Unread' ? 'btn-yellow' : 'btn-ghost' ?> btn-sm">Unread</a>
                 <a href="contact_messages.php?filter=Read<?= $search ? '&search='.urlencode($search) : '' ?>" class="btn <?= $filter === 'Read' ? 'btn-yellow' : 'btn-ghost' ?> btn-sm">Read</a>
                 <a href="contact_messages.php?filter=Replied<?= $search ? '&search='.urlencode($search) : '' ?>" class="btn <?= $filter === 'Replied' ? 'btn-yellow' : 'btn-ghost' ?> btn-sm">Replied</a>
-                <a href="contact_messages.php?filter=Archived<?= $search ? '&search='.urlencode($search) : '' ?>" class="btn <?= $filter === 'Archived' ? 'btn-yellow' : 'btn-ghost' ?> btn-sm">Archived</a>
+
             </div>
             <div style="flex:1;min-width:160px;display:flex;gap:6px;">
                 <input type="text" name="search" placeholder="Search name, email, subject..." value="<?= e($search) ?>" class="form-input" style="padding:8px 12px;font-size:13px;">
@@ -267,16 +262,23 @@ require __DIR__ . '/includes/admin_header.php';
                     <th>Subject</th>
                     <th>Date</th>
                     <th>Status</th>
+                    <th>Seen By</th>
+                    <th>Replied By</th>
                     <th>Actions</th>
                 </tr>
             </thead>
             <tbody>
                 <?php foreach ($messagesList as $msg): 
+                    $displayStatus = match($msg['status']) {
+                        'new' => 'Unread',
+                        'read' => 'Read',
+                        'replied' => 'Replied',
+                        default => ucfirst($msg['status'])
+                    };
                     $badgeClass = match($msg['status']) {
-                        'Unread' => 'badge-red',
-                        'Read' => 'badge-blue',
-                        'Replied' => 'badge-purple',
-                        'Archived' => 'badge-gray',
+                        'new' => 'badge-red',
+                        'read' => 'badge-blue',
+                        'replied' => 'badge-purple',
                         default => 'badge-gray'
                     };
                 ?>
@@ -284,16 +286,16 @@ require __DIR__ . '/includes/admin_header.php';
                     <td style="font-weight:600;"><?= e($msg['name']) ?></td>
                     <td><a href="mailto:<?= e($msg['email']) ?>" style="color:#64748b;text-decoration:none;"><?= e($msg['email']) ?></a></td>
                     <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"><?= e($msg['subject']) ?></td>
-                    <td style="white-space:nowrap;color:#94a3b8;font-size:13px;"><?= date('d M Y, H:i', strtotime($msg['submitted_at'])) ?></td>
-                    <td><span class="badge <?= $badgeClass ?>"><?= e($msg['status']) ?></span></td>
+                    <td style="white-space:nowrap;color:#94a3b8;font-size:13px;"><?= date('d M Y, H:i', strtotime($msg['submitted_on'])) ?></td>
+                    <td><span class="badge <?= $badgeClass ?>"><?= e($displayStatus) ?></span></td>
+                    <td style="font-size:13px;color:#64748b;"><?= e($msg['seen_by'] ?? '—') ?></td>
+                    <td style="font-size:13px;color:#64748b;"><?= e($msg['replied_by'] ?? '—') ?></td>
                     <td>
                         <div style="display:flex;gap:4px;flex-wrap:nowrap;">
-                            <a href="?view=<?= $msg['id'] ?>" class="btn btn-ghost btn-xs" title="View"><i data-lucide="eye" style="width:14px;height:14px;"></i></a>
-                            <a href="?reply=<?= $msg['id'] ?>" class="btn btn-ghost btn-xs" title="Reply"><i data-lucide="reply" style="width:14px;height:14px;"></i></a>
-                            <?php if ($msg['status'] !== 'Archived'): ?>
-                            <a href="?archive=<?= $msg['id'] ?>" class="btn btn-ghost btn-xs" title="Archive" onclick="return confirm('Archive this message?')"><i data-lucide="archive" style="width:14px;height:14px;"></i></a>
-                            <?php endif; ?>
-                            <a href="?delete=<?= $msg['id'] ?>" class="btn btn-ghost btn-xs" style="color:#ef4444;" title="Delete" onclick="return confirm('Permanently delete this message?')"><i data-lucide="trash-2" style="width:14px;height:14px;"></i></a>
+                            <a href="?view=<?= $msg['message_id'] ?>" class="btn btn-ghost btn-xs" title="View"><i data-lucide="eye" style="width:14px;height:14px;"></i></a>
+                            <a href="<?= commComposerUrl(['to' => $msg['email'], 'subject' => (!empty($msg['subject']) ? 'Re: ' . $msg['subject'] . ' – ' : 'Regarding Your Inquiry – ') . CLUB_NAME, 'template' => 'contact_reply', 'recipient_name' => $msg['name'], 'original_subject' => $msg['subject'] ?? '', 'original_message' => $msg['message'] ?? '', 'module' => 'Contact Messages', 'action' => 'Contact Message Reply (Email Sent)', 'message_id' => $msg['message_id'], 'skip_url' => 'contact_messages.php?skip_log=' . $msg['message_id']]) ?>" class="btn btn-ghost btn-xs" title="Reply"><i data-lucide="reply" style="width:14px;height:14px;"></i></a>
+
+                            <a href="?delete=<?= $msg['message_id'] ?>" class="btn btn-ghost btn-xs" style="color:#ef4444;" title="Delete" onclick="return confirm('Permanently delete this message?')"><i data-lucide="trash-2" style="width:14px;height:14px;"></i></a>
                         </div>
                     </td>
                 </tr>
@@ -329,11 +331,27 @@ require __DIR__ . '/includes/admin_header.php';
                     </div>
                     <div style="grid-column:span 2;">
                         <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:2px;">Date Submitted</label>
-                        <div style="color:#64748b;"><?= date('d F Y, h:i A', strtotime($viewMessage['submitted_at'])) ?></div>
+                        <div style="color:#64748b;"><?= date('d F Y, h:i A', strtotime($viewMessage['submitted_on'])) ?></div>
                     </div>
                     <div style="grid-column:span 2;">
                         <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:2px;">Status</label>
-                        <div><span class="badge <?= match($viewMessage['status']) { 'Unread' => 'badge-red', 'Read' => 'badge-blue', 'Replied' => 'badge-purple', 'Archived' => 'badge-gray', default => 'badge-gray' } ?>"><?= e($viewMessage['status']) ?></span></div>
+                        <div><span class="badge <?= match($viewMessage['status']) { 'new' => 'badge-red', 'read' => 'badge-blue', 'replied' => 'badge-purple', default => 'badge-gray' } ?>"><?= e(match($viewMessage['status']) { 'new' => 'Unread', 'read' => 'Read', 'replied' => 'Replied', default => ucfirst($viewMessage['status']) }) ?></span></div>
+                    </div>
+                    <div style="grid-column:span 2;">
+                        <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:2px;">Seen By</label>
+                        <div style="color:#64748b;"><?= e($viewMessage['seen_by'] ?? '—') ?></div>
+                    </div>
+                    <div style="grid-column:span 2;">
+                        <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:2px;">Seen At</label>
+                        <div style="color:#64748b;"><?= isset($viewMessage['seen_at']) && $viewMessage['seen_at'] ? date('d F Y, h:i A', strtotime($viewMessage['seen_at'])) : '—' ?></div>
+                    </div>
+                    <div style="grid-column:span 2;">
+                        <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:2px;">Replied By</label>
+                        <div style="color:#64748b;"><?= e($viewMessage['replied_by'] ?? '—') ?></div>
+                    </div>
+                    <div style="grid-column:span 2;">
+                        <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:2px;">Replied At</label>
+                        <div style="color:#64748b;"><?= isset($viewMessage['replied_at']) && $viewMessage['replied_at'] ? date('d F Y, h:i A', strtotime($viewMessage['replied_at'])) : '—' ?></div>
                     </div>
                     <div style="grid-column:span 2;">
                         <label style="font-size:12px;font-weight:600;color:#64748b;display:block;margin-bottom:4px;">Message</label>
@@ -343,54 +361,10 @@ require __DIR__ . '/includes/admin_header.php';
             </div>
         </div>
         <div class="modal-footer">
-            <a href="?reply=<?= $viewMessage['id'] ?>" class="btn btn-yellow btn-sm"><i data-lucide="reply" style="width:14px;height:14px;"></i> Reply</a>
-            <?php if ($viewMessage['status'] !== 'Archived'): ?>
-            <a href="?archive=<?= $viewMessage['id'] ?>" class="btn btn-ghost btn-sm" onclick="return confirm('Archive this message?')"><i data-lucide="archive" style="width:14px;height:14px;"></i> Archive</a>
-            <?php endif; ?>
+            <a href="<?= commComposerUrl(['to' => $viewMessage['email'], 'subject' => (!empty($viewMessage['subject']) ? 'Re: ' . $viewMessage['subject'] . ' – ' : 'Regarding Your Inquiry – ') . CLUB_NAME, 'template' => 'contact_reply', 'recipient_name' => $viewMessage['name'], 'original_subject' => $viewMessage['subject'] ?? '', 'original_message' => $viewMessage['message'] ?? '', 'module' => 'Contact Messages', 'action' => 'Contact Message Reply (Email Sent)', 'message_id' => $viewMessage['message_id'], 'skip_url' => 'contact_messages.php?skip_log=' . $viewMessage['message_id']]) ?>" class="btn btn-yellow btn-sm"><i data-lucide="reply" style="width:14px;height:14px;"></i> Reply</a>
+
             <button class="btn btn-ghost btn-sm" onclick="this.closest('.modal-overlay').style.display='none'">Close</button>
         </div>
-    </div>
-</div>
-<?php endif; ?>
-
-<!-- ─── REPLY FORM ─── -->
-<?php if ($replyMessage): 
-    $defaultSubject = 'Re: ' . $replyMessage['subject'];
-?>
-<div class="modal-overlay open" onclick="this.style.display='none'">
-    <div class="modal-content" onclick="event.stopPropagation()" style="max-width:600px;">
-        <div class="modal-header">
-            <h2>Reply to <?= e($replyMessage['name']) ?></h2>
-            <button class="modal-close" onclick="this.closest('.modal-overlay').style.display='none'"><i data-lucide="x" style="width:18px;height:18px;"></i></button>
-        </div>
-        <form method="POST">
-            <input type="hidden" name="action" value="reply">
-            <input type="hidden" name="message_id" value="<?= $replyMessage['id'] ?>">
-            <div class="modal-body">
-                <div style="display:grid;gap:14px;">
-                    <div>
-                        <label class="form-label">To</label>
-                        <div style="padding:10px 13px;background:#f8fafc;border-radius:9px;border:1px solid #e2e8f0;font-size:13px;"><?= e($replyMessage['name']) ?> &lt;<?= e($replyMessage['email']) ?>&gt;</div>
-                    </div>
-                    <div>
-                        <label class="form-label">Subject</label>
-                        <input type="text" name="reply_subject" class="form-input" value="<?= e($defaultSubject) ?>" required>
-                    </div>
-                    <div>
-                        <label class="form-label">Your Reply</label>
-                        <textarea name="reply_body" class="form-textarea" rows="8" required placeholder="Type your reply here..."></textarea>
-                    </div>
-                    <div style="background:#f0f9ff;border:1px solid #bae6fd;padding:12px 16px;border-radius:10px;font-size:13px;color:#0369a1;">
-                        <strong>Original Message:</strong><br>
-                        <?= e($replyMessage['subject']) ?> — <?= nl2br(e(mb_strimwidth($replyMessage['message'], 0, 200, '...'))) ?>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-ghost" onclick="this.closest('.modal-overlay').style.display='none'">Cancel</button>
-                <button type="submit" class="btn btn-yellow"><i data-lucide="send" style="width:16px;height:16px;"></i> Send Reply</button>
-            </div>
-        </form>
     </div>
 </div>
 <?php endif; ?>

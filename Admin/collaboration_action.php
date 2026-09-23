@@ -8,7 +8,7 @@ if (!isset($_SESSION['admin_id'])) {
 }
 
 require __DIR__ . '/../includes/db_connect.php';
-require __DIR__ . '/../includes/send_email.php';
+require_once __DIR__ . '/../includes/communication_engine.php';
 
 // ----------------------------
 // DELETE Proposal
@@ -52,22 +52,24 @@ if (isset($_GET['status']) && isset($_GET['id'])) {
         $upd->execute();
         $upd->close();
 
-        // Send email notification using templates
-        $emailSent = false;
+        // Redirect to Email Composer if proposal has email
+        $emailNote = '';
         if (!empty($proposal['email'])) {
-            $collabTemplate = $newStatus === 'Approved'
-                ? ['file' => 'collaboration_approved.php', 'func' => 'getCollaborationApprovedContent']
-                : ['file' => 'collaboration_rejected.php', 'func' => 'getCollaborationRejectedContent'];
-
-            require_once __DIR__ . '/../includes/email_templates/' . $collabTemplate['file'];
-            $content = $collabTemplate['func']($proposal['name']);
-            $mailResult = sendEmail($proposal['email'], $content['subject'], $content['body']);
-            $emailSent = $mailResult['success'];
+            $templateKey = $newStatus === 'Approved' ? 'collaboration_approved' : 'collaboration_rejected';
+            $composerParams = [
+                'to'             => $proposal['email'],
+                'module'         => 'Collaborations',
+                'action'         => 'Proposal ' . $newStatus,
+                'template'       => $templateKey,
+                'recipient_name' => $proposal['name'],
+                'skip_url'       => 'collaboration_action.php',
+            ];
+            header("Location: " . commComposerUrl($composerParams));
+            exit;
         }
 
         $msg = $newStatus === 'Approved' ? 'approved' : 'rejected';
-        $emailNote = $emailSent ? ' Email sent to proposer.' : '';
-        echo "<script>alert('Proposal has been " . $msg . " successfully." . $emailNote . "'); window.location.href='collaboration_action.php';</script>";
+        echo "<script>alert('Proposal has been " . $msg . " successfully.'); window.location.href='collaboration_action.php';</script>";
     } else {
         echo "<script>alert('Proposal not found.'); window.location.href='collaboration_action.php';</script>";
     }

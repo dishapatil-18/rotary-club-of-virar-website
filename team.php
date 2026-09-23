@@ -3,10 +3,9 @@ session_start();
 require_once __DIR__ . '/includes/db_connect.php';
 require_once __DIR__ . '/config/club_settings.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
-
-function e($s) {
-    return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8');
-}
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
 // Fetch all active members ordered by display_order
 $members = [];
@@ -74,7 +73,7 @@ if (!$currentYearId && !empty($rotaryYears)) { $currentYearId = $rotaryYears[0][
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rotary Club of Virar - Meet Our Team</title>
+    <title><?= e($ws['website_name']) ?> - Meet Our Team</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
@@ -828,8 +827,8 @@ if (!$currentYearId && !empty($rotaryYears)) { $currentYearId = $rotaryYears[0][
     <header class="sticky top-0 z-40 bg-white shadow-md">
         <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-10 h-10 rounded-full object-cover">
-                <span class="text-xl font-extrabold tracking-tight" style="color: var(--rotary-blue);">Rotary Club of Virar</span>
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="w-10 h-10 rounded-full object-cover">
+                <span class="text-xl font-extrabold tracking-tight" style="color: var(--rotary-blue);"><?= e($ws['website_name']) ?></span>
             </div>
             <div class="hidden lg:flex flex-1 justify-center space-x-8">
                 <a href="index.php" class="nav-link">Home</a>
@@ -874,8 +873,8 @@ if (!$currentYearId && !empty($rotaryYears)) { $currentYearId = $rotaryYears[0][
 
             <div class="relative z-10 text-center px-4 max-w-5xl mx-auto py-20 md:py-0">
                 <div class="hero-rotary-badge">
-                    <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" onerror="this.style.display='none'">
-                    <span>Rotary Club of Virar</span>
+                    <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?>" onerror="this.style.display='none'">
+                    <span><?= e($ws['website_name']) ?></span>
                 </div>
 
                 <h1 class="hero-title">

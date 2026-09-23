@@ -11,7 +11,7 @@ if (!isset($_SESSION['admin_id'])) {
 }
 
 require __DIR__ . '/../includes/db_connect.php';
-require __DIR__ . '/../includes/send_email.php';
+require_once __DIR__ . '/../includes/communication_engine.php';
 
 // We'll still accept ?tab=donations or ?tab=donors for initial render
 $tab = $_GET['tab'] ?? 'donations';  // Default tab
@@ -59,12 +59,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_donation'])) {
     // --------- INSERT NEW DONATION ---------
     if ($donation_id === 0) {
         $pickup_json = $pickup_option_raw !== '' ? $pickup_option_raw : '{"option":"","address":"","date":"","notes":""}';
-        $stmt = $conn->prepare("INSERT INTO donations (donor_id, donation_type, description, amount, utr_number, screenshot_path, pickup_option, status, date) 
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-        $stmt->bind_param("issdssss", $donor_id, $donation_type, $description, $amount, $utr_number, $screenshot_path, $pickup_json, $status);
+        $adminRole = $_SESSION['admin_role'] ?? null;
+        $adminName = $_SESSION['admin_name'] ?? 'Admin';
+        $stmt = $conn->prepare("INSERT INTO donations (donor_id, donation_type, description, amount, utr_number, screenshot_path, pickup_option, status, date, status_updated_by, status_updated_role) 
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?)");
+        $stmt->bind_param("issdssssss", $donor_id, $donation_type, $description, $amount, $utr_number, $screenshot_path, $pickup_json, $status, $adminName, $adminRole);
         $stmt->execute();
+        $newDonationId = $conn->insert_id;
         $stmt->close();
-        echo "<script>alert('Donation added successfully'); window.location='donation_action.php?tab=donations';</script>";
+
+        // Record initial status history
+        $adminId = $_SESSION['admin_id'] ?? null;
+        $adminRole = $_SESSION['admin_role'] ?? null;
+        $adminName = $_SESSION['admin_name'] ?? 'Admin';
+        $remarks = trim($_POST['history_remarks'] ?? '');
+        $hstmt = $conn->prepare("INSERT INTO donation_status_history (donation_id, previous_status, new_status, admin_id, admin_name, admin_role, remarks, updated_at) VALUES (?, NULL, ?, ?, ?, ?, ?, NOW())");
+        $hstmt->bind_param("isiss", $newDonationId, $status, $adminId, $adminName, $adminRole, $remarks);
+        $hstmt->execute();
+                $hstmt->close();
+        logAudit($conn, 'Donations', 'Donation Added', 'Added donation #' . $newDonationId . ' (Type: ' . $donation_type . ', Amount: ' . ($amount ?? 'N/A') . ').', 'INFO', 'success');
+
+        echo "<script>alert('Donation added successfully');
+ window.location='donation_action.php?tab=donations';</script>";
         exit;
     }
 
@@ -87,37 +103,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_donation'])) {
 
         $pickup_json = $pickup_option_raw !== '' ? $pickup_option_raw : '{"option":"","address":"","date":"","notes":""}';
         $adminName = $_SESSION['admin_name'] ?? 'Admin';
+        $adminRole = $_SESSION['admin_role'] ?? null;
         $now = date('Y-m-d H:i:s');
         $stmt = $conn->prepare("UPDATE donations 
-                                SET donor_id=?, donation_type=?, description=?, amount=?, utr_number=?, screenshot_path=?, pickup_option=?, status=?, status_updated_at=?, status_updated_by=? 
+                                SET donor_id=?, donation_type=?, description=?, amount=?, utr_number=?, screenshot_path=?, pickup_option=?, status=?, status_updated_at=?, status_updated_by=?, status_updated_role=? 
                                 WHERE donation_id=?");
-        $stmt->bind_param("issdssssssi", $donor_id, $donation_type, $description, $amount, $utr_number, $screenshot_path, $pickup_json, $status, $now, $adminName, $donation_id);
+        $stmt->bind_param("issdsssssssi", $donor_id, $donation_type, $description, $amount, $utr_number, $screenshot_path, $pickup_json, $status, $now, $adminName, $adminRole, $donation_id);
         $stmt->execute();
         $stmt->close();
 
-        // Send email if status changed and donor has email
-        $emailNote = '';
-        if ($oldStatus !== $status && $donorEmail !== '') {
-            $donorTemplateMap = [
-                'Verified' => ['file' => 'donation_verified.php', 'func' => 'getDonationVerifiedContent'],
-                'Contacted' => ['file' => 'donation_contacted.php', 'func' => 'getDonationContactedContent'],
-                'Received' => ['file' => 'donation_received.php', 'func' => 'getDonationReceivedContent'],
-                'Completed' => ['file' => 'donation_completed.php', 'func' => 'getDonationCompletedContent'],
-            ];
-            if (isset($donorTemplateMap[$status])) {
-                $tmpl = $donorTemplateMap[$status];
-                require_once __DIR__ . '/../includes/email_templates/' . $tmpl['file'];
-                $content = $tmpl['func']($donorName);
-                $mailResult = sendEmail($donorEmail, $content['subject'], $content['body']);
-                if (!$mailResult['success']) {
-                    $emailNote = ' (Email notification failed)';
-                } else {
-                    $emailNote = ' (Email sent)';
-                }
-            }
+        // Insert status history if status changed
+        if ($oldStatus !== $status) {
+            $adminId = $_SESSION['admin_id'] ?? null;
+            $adminRole = $_SESSION['admin_role'] ?? null;
+            $remarks = trim($_POST['history_remarks'] ?? '');
+            $hstmt = $conn->prepare("INSERT INTO donation_status_history (donation_id, previous_status, new_status, admin_id, admin_name, admin_role, remarks, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+            $hstmt->bind_param("ississs", $donation_id, $oldStatus, $status, $adminId, $adminName, $adminRole, $remarks);
+            $hstmt->execute();
+            $hstmt->close();
         }
 
-        echo "<script>alert('Donation updated successfully!" . ($emailNote ?? '') . "'); window.location='donation_action.php?tab=donations';</script>";
+        if ($oldStatus !== $status) {
+            logAudit($conn, 'Donations', 'Donation Status Changed', 'Donation #' . $donation_id . ' status changed from "' . $oldStatus . '" to "' . $status . '".', 'INFO', 'success');
+        } else {
+            logAudit($conn, 'Donations', 'Donation Reviewed', 'Updated donation #' . $donation_id . '.', 'INFO', 'success');
+        }
+
+        // Redirect to Email Composer if status changed and donor has email
+        if ($oldStatus !== $status && $donorEmail !== '') {
+            $templateKey = [
+                'Contacted' => 'donation_contacted',
+                'Completed' => 'donation_completed',
+            ][$status] ?? '';
+
+            $composerParams = [
+                'to'         => $donorEmail,
+                'module'     => 'Donations',
+                'action'     => 'Donation Status Email',
+                'template'   => $templateKey,
+                'recipient_name' => $donorName,
+                'admin_name' => $adminName,
+                'skip_url'   => 'donation_action.php?tab=donations',
+            ];
+            header("Location: " . commComposerUrl($composerParams));
+            exit;
+        }
+
+        echo "<script>alert('Donation updated successfully!'); window.location='donation_action.php?tab=donations';</script>";
         exit;
     }
 }
@@ -132,6 +164,7 @@ if (isset($_GET['delete_donation'])) {
     $stmt->bind_param("i", $id);
     $stmt->execute();
     $stmt->close();
+    logAudit($conn, 'Donations', 'Donation Deleted', 'Deleted donation ID ' . $id . '.', 'WARNING', 'success');
 
     echo "<script>alert('Donation deleted'); window.location='donation_action.php?tab=donations';</script>";
     exit;
@@ -307,7 +340,7 @@ require __DIR__ . '/includes/admin_header.php';
                     <label class="form-label">Status</label>
                     <select name="status" class="form-input">
                         <?php
-                        $statuses = ['Pending Verification','Verified','Contacted','Received','Completed'];
+                        $statuses = ['Pending Verification','Contacted','Completed'];
                         $curStatus = $editDonation['status'] ?? 'Pending Verification';
                         ?>
                         <?php foreach ($statuses as $s): ?>
@@ -334,6 +367,12 @@ require __DIR__ . '/includes/admin_header.php';
                 </div>
             </div>
 
+            <!-- Internal Remarks -->
+            <div class="mt-4">
+                <label class="form-label">Internal Remarks (visible to admins only)</label>
+                <textarea name="history_remarks" rows="2" class="form-input" placeholder="e.g. Payment screenshot verified, Donor contacted by phone..."><?= htmlspecialchars($_POST['history_remarks'] ?? '') ?></textarea>
+            </div>
+
             <div class="flex justify-end space-x-3 mt-4">
                 <a href="dashboard.php" class="btn btn-secondary"><i data-lucide="arrow-left" class="w-4 h-4"></i> Back to Dashboard</a>
                 <a href="donation_action.php?tab=donations" class="btn btn-secondary">Cancel</a>
@@ -342,6 +381,62 @@ require __DIR__ . '/includes/admin_header.php';
                 </button>
             </div>
         </form>
+
+        <?php if ($editDonation): 
+            $donationId = $editDonation['donation_id'];
+            $histRes = $conn->prepare("SELECT h.*, a.name AS admin_display_name 
+                                       FROM donation_status_history h 
+                                       LEFT JOIN admins a ON h.admin_id = a.admin_id 
+                                       WHERE h.donation_id = ? 
+                                       ORDER BY h.updated_at ASC");
+            $histRes->bind_param("i", $donationId);
+            $histRes->execute();
+            $histRows = $histRes->get_result()->fetch_all(MYSQLI_ASSOC);
+            $histRes->close();
+        ?>
+        <?php if (count($histRows) > 0): ?>
+        <div class="mt-8 mb-6">
+            <h3 class="text-xl font-bold mb-4">Status History</h3>
+            <div class="bg-gray-50 p-6 rounded-lg border">
+                <div style="position:relative;padding-left:28px;">
+                    <?php 
+                    $statusColors = [
+                        'Pending Verification' => '#f59e0b',
+                        'Contacted' => '#3b82f6',
+                        'Completed' => '#059669',
+                    ];
+                    foreach ($histRows as $idx => $h):
+                        $prevColor = $statusColors[$h['previous_status']] ?? '#94a3b8';
+                        $newColor = $statusColors[$h['new_status']] ?? '#94a3b8';
+                        $dispName = $h['admin_display_name'] ?? $h['admin_name'] ?? 'Admin';
+                    ?>
+                    <div style="position:relative;padding-bottom:<?= $idx < count($histRows)-1 ? '24px' : '0' ?>;">
+                        <?php if ($idx < count($histRows)-1): ?>
+                        <div style="position:absolute;left:-16px;top:20px;bottom:0;width:2px;background:#e2e8f0;"></div>
+                        <?php endif; ?>
+                        <div style="position:absolute;left:-22px;top:4px;width:14px;height:14px;border-radius:50%;background:<?= $newColor ?>;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.15);"></div>
+                        <div style="font-size:13px;color:#334155;">
+                            <span style="font-weight:600;"><?= htmlspecialchars($h['previous_status'] ?? '—') ?></span>
+                            <span style="color:#94a3b8;margin:0 6px;">→</span>
+                            <span style="font-weight:700;color:<?= $newColor ?>;"><?= htmlspecialchars($h['new_status']) ?></span>
+                        </div>
+                        <div style="font-size:12px;color:#64748b;margin-top:2px;">
+                            <span>By: <?= htmlspecialchars($dispName) ?></span>
+                            <?php if ($h['admin_role']): ?>
+                            <span style="margin-left:12px;">Role: <?= htmlspecialchars($h['admin_role']) ?></span>
+                            <?php endif; ?>
+                            <span style="margin-left:12px;"><?= date('d M Y, h:i A', strtotime($h['updated_at'])) ?></span>
+                        </div>
+                        <?php if ($h['remarks']): ?>
+                        <div style="font-size:12px;color:#64748b;margin-top:2px;font-style:italic;"><?= htmlspecialchars($h['remarks']) ?></div>
+                        <?php endif; ?>
+                    </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+        </div>
+        <?php endif; ?>
+        <?php endif; ?>
 
         <!-- Donation Table -->
         <h3 class="text-xl font-bold mb-4">All Donations</h3>
@@ -379,9 +474,7 @@ require __DIR__ . '/includes/admin_header.php';
                     }
                     $statusColor = 'badge-gray';
                     if ($d['status'] === 'Pending Verification') $statusColor = 'badge-yellow';
-                    elseif ($d['status'] === 'Verified') $statusColor = 'badge-green';
                     elseif ($d['status'] === 'Contacted') $statusColor = 'badge-blue';
-                    elseif ($d['status'] === 'Received') $statusColor = 'badge-purple';
                     elseif ($d['status'] === 'Completed') $statusColor = 'badge-green';
                 ?>
                 <tr>

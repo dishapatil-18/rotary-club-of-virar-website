@@ -1,38 +1,106 @@
 <?php
 session_start();
-include 'includes/db_connect.php';
-require_once __DIR__ . '/includes/send_email.php';
+require_once __DIR__ . '/includes/db_connect.php';
+require_once __DIR__ . '/includes/communication_engine.php';
 require_once __DIR__ . '/config/club_settings.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
-
-function e($s) {
-    return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8');
-}
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
 function getSiteContent($conn, $page) {
-    $r = $conn->query("SELECT section, content FROM site_content WHERE page = '$page'");
+    $stmt = $conn->prepare("SELECT section, content FROM site_content WHERE page = ?");
+    $stmt->bind_param("s", $page);
+    $stmt->execute();
+    $r = $stmt->get_result();
     $content = [];
     if ($r) {
         while ($row = $r->fetch_assoc()) $content[$row['section']] = $row['content'];
     }
+    $stmt->close();
     return $content;
 }
+function contactImg($path) {
+    if (!$path) return '';
+    if (str_starts_with($path, '../')) return substr($path, 3);
+    return $path;
+}
 $contactContent = getSiteContent($conn, 'contact');
-$contactDescription = $contactContent['contact_description'] ?? '';
+
+// Contact & Social Links (centralized source - overrides contact page values)
+$contactSocialCs = [];
+$rCs = $conn->query("SELECT section, content FROM site_content WHERE page = 'contact_social'");
+if ($rCs) {
+    while ($row = $rCs->fetch_assoc()) $contactSocialCs[$row['section']] = $row['content'];
+}
+$csMapContact = [
+    'email' => ['contact_card2_value', 'contact_general_email'],
+    'phone' => ['contact_card1_value'],
+    'address' => ['contact_card3_value', 'contact_address'],
+    'facebook_url' => ['contact_facebook_url'],
+    'instagram_url' => ['contact_instagram_url'],
+    'map_url' => ['contact_map_btn_url'],
+    'map_embed_url' => ['contact_map_embed_url'],
+];
+foreach ($csMapContact as $csKey => $targetKeys) {
+    if (!empty($contactSocialCs[$csKey])) {
+        foreach ($targetKeys as $tk) {
+            $contactContent[$tk] = $contactSocialCs[$csKey];
+        }
+    }
+}
+
+// Hero
+$contactHeroBgImage = contactImg($contactContent['contact_hero_bg_image'] ?? '');
+$contactHeroBadge = $contactContent['contact_hero_badge'] ?? 'Rotary Club of Virar';
+$contactHeroHeading = $contactContent['contact_hero_heading'] ?? 'Let\'s <span class="highlight">Connect</span>';
+$contactHeroDescription = $contactContent['contact_hero_description'] ?? "We're here to listen, collaborate, and make a difference. Reach out to us anytime — your ideas and feedback matter.";
+
+// How to Reach Us
+$contactSectionBadge = $contactContent['contact_section_badge'] ?? 'GET IN TOUCH';
+$contactSectionHeading = $contactContent['contact_section_heading'] ?? 'How to Reach Us';
+
+// Contact Cards
+$contactCard1Icon = $contactContent['contact_card1_icon'] ?? 'fas fa-phone-alt';
+$contactCard1Title = $contactContent['contact_card1_title'] ?? 'Call Us';
+$contactCard1Value = $contactContent['contact_card1_value'] ?? '';
+$contactCard2Icon = $contactContent['contact_card2_icon'] ?? 'fas fa-envelope';
+$contactCard2Title = $contactContent['contact_card2_title'] ?? 'Email Us';
+$contactCard2Value = $contactContent['contact_card2_value'] ?? '';
+$contactCard3Icon = $contactContent['contact_card3_icon'] ?? 'fas fa-map-marker-alt';
+$contactCard3Title = $contactContent['contact_card3_title'] ?? 'Visit Us';
+$contactCard3Value = $contactContent['contact_card3_value'] ?? '';
+
+// Contact Form
+$contactFormBadge = $contactContent['contact_form_badge'] ?? 'Send a Message';
+$contactFormHeading = $contactContent['contact_form_heading'] ?? "We'd Love to Hear From You";
+
+// Follow Us
+$contactFollowBadge = $contactContent['contact_follow_badge'] ?? 'Follow Us';
+$contactFollowHeading = $contactContent['contact_follow_heading'] ?? 'Stay Connected';
+$contactFacebookUrl = $contactContent['contact_facebook_url'] ?? '';
+$contactInstagramUrl = $contactContent['contact_instagram_url'] ?? '';
+
+// Other Inquiries
+$contactInquiriesBadge = $contactContent['contact_inquiries_badge'] ?? 'Official';
+$contactInquiriesHeading = $contactContent['contact_inquiries_heading'] ?? 'Other Inquiries';
+$contactGeneralEmail = $contactContent['contact_general_email'] ?? '';
+$contactYouthEmail = $contactContent['contact_youth_email'] ?? '';
+
+// Location
+$contactLocationBadge = $contactContent['contact_location_badge'] ?? 'Our Location';
+$contactLocationHeading = $contactContent['contact_location_heading'] ?? 'Find Us Here';
+$contactMapEmbedUrl = $contactContent['contact_map_embed_url'] ?? '';
+$contactMapBtnText = $contactContent['contact_map_btn_text'] ?? 'View on Map';
+$contactMapBtnUrl = $contactContent['contact_map_btn_url'] ?? '';
+$contactAddress = $contactContent['contact_address'] ?? '';
+
+// Bottom Quote
+$contactQuoteText = $contactContent['contact_quote_text'] ?? '"Service Above Self"';
+$contactQuoteDescription = $contactContent['contact_quote_description'] ?? 'The heart of Rotary beats through the dedication of its members — ordinary people doing extraordinary things for the greater good.';
 
 $contactMessage = '';
 $contactError = '';
-
-// Ensure contact_messages table exists
-$conn->query("CREATE TABLE IF NOT EXISTS contact_messages (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    email VARCHAR(255) NOT NULL,
-    subject VARCHAR(255) NOT NULL,
-    message TEXT NOT NULL,
-    submitted_at DATETIME NOT NULL,
-    is_read TINYINT(1) DEFAULT 0
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4");
 
 // Handle contact form submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'contact_submit') {
@@ -59,14 +127,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     // Store in database
-    $stmt = $conn->prepare("INSERT INTO contact_messages (name, email, subject, message, submitted_at) VALUES (?, ?, ?, ?, NOW())");
+    $stmt = $conn->prepare("INSERT INTO contact_messages (name, email, subject, message, status, submitted_on) VALUES (?, ?, ?, ?, 'new', NOW())");
     if ($stmt) {
         $stmt->bind_param("ssss", $fullName, $email, $subject, $message);
         $stmt->execute();
         $stmt->close();
     }
 
-    // Send email notification to club
+    // Send email notification to club via Communication Engine
     $emailBody = "New contact form submission:\n\n"
                 . "Name: $fullName\n"
                . "Email: $email\n"
@@ -74,47 +142,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                . "Message:\n$message\n\n"
                . "Submitted at: " . date('Y-m-d H:i:s');
 
-    sendEmail(CLUB_EMAIL, "Contact Form: $subject", nl2br($emailBody));
+    commSendEmail($conn, CLUB_EMAIL, "Contact Form: $subject", nl2br($emailBody), 'Contact Messages', 'Contact Form Submitted', "New contact from $fullName ($email)");
 
     echo json_encode(['success' => true]);
     exit;
 }
 
-// Fetch leadership from members
-$leadership = [];
-$sql = "SELECT name, role, email, phone_number, photo_url, short_bio AS bio FROM members WHERE role IN ('President','Secretary','Treasurer') AND status='Active' ORDER BY FIELD(role,'President','Secretary','Treasurer')";
-$res = $conn->query($sql);
-if ($res) {
-    while ($row = $res->fetch_assoc()) $leadership[] = $row;
-}
 
-// Fallback to admins table if members table has no data
-if (empty($leadership)) {
-    $sql2 = "SELECT name, email, role, phone, '' AS photo_url, '' AS bio FROM admins WHERE role IN ('President','Secretary','Treasurer') ORDER BY FIELD(role,'President','Secretary','Treasurer')";
-    $res2 = $conn->query($sql2);
-    if ($res2) {
-        while ($row = $res2->fetch_assoc()) {
-            $row['phone_number'] = $row['phone'];
-            $leadership[] = $row;
-        }
-    }
-}
-
-function getPhotoUrl($path) {
-    if (!empty($path) && file_exists(__DIR__ . '/' . $path)) {
-        return $path;
-    }
-    return '';
-}
-
-function getDefaultBio($role) {
-    return match($role) {
-        'President' => 'Leading with vision, guiding the club toward meaningful service and community impact.',
-        'Secretary' => 'Ensuring seamless communication, records, and operational excellence for the club.',
-        'Treasurer' => 'Managing club finances with transparency, integrity, and responsible stewardship.',
-        default => 'Dedicated to serving the Rotary mission and our community.',
-    };
-}
 ?>
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
@@ -122,7 +156,7 @@ function getDefaultBio($role) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="csrf-token" content="<?= generateCsrfToken() ?>">
-    <title>Contact Rotary Club of Virar</title>
+    <title>Contact <?= e($ws['website_name']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
@@ -376,123 +410,9 @@ function getDefaultBio($role) {
             border-radius: 2px;
         }
 
-        /* ===== LEADERSHIP CARDS ===== */
-        .leadership-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 32px;
-            max-width: 1000px;
-            margin: 0 auto;
-        }
-        .leader-card {
-            position: relative;
-            background: white;
-            border-radius: 20px;
-            padding: 40px 24px 32px;
-            text-align: center;
-            transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-            border: 1px solid rgba(255, 192, 0, 0.2);
-            overflow: hidden;
-        }
-        .leader-card::before {
-            content: '';
-            position: absolute;
-            top: 0; left: 0; right: 0;
-            height: 4px;
-            background: linear-gradient(90deg, var(--rotary-yellow), #ffb347, var(--rotary-yellow));
-            background-size: 200% 100%;
-            animation: shimmer 3s ease-in-out infinite;
-        }
         @keyframes shimmer {
             0%, 100% { background-position: 0% 0%; }
             50% { background-position: 100% 0%; }
-        }
-        .leader-card:hover {
-            transform: translateY(-10px) scale(1.02);
-            box-shadow: 0 25px 50px -12px rgba(10, 35, 66, 0.25), 0 0 0 1px rgba(255, 192, 0, 0.3);
-        }
-        .leader-card .card-glow {
-            position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(255,192,0,0.06) 0%, transparent 60%);
-            pointer-events: none;
-            opacity: 0;
-            transition: opacity 0.4s;
-        }
-        .leader-card:hover .card-glow { opacity: 1; }
-        .leader-card .photo-wrap {
-            width: 120px;
-            height: 120px;
-            margin: 0 auto 16px;
-            border-radius: 50%;
-            padding: 4px;
-            background: linear-gradient(135deg, var(--rotary-yellow), #ffb347);
-            box-shadow: 0 0 25px rgba(255, 192, 0, 0.3);
-            transition: all 0.4s;
-        }
-        .leader-card:hover .photo-wrap {
-            box-shadow: 0 0 40px rgba(255, 192, 0, 0.5);
-            transform: scale(1.05);
-        }
-        .leader-card .photo-wrap img {
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            object-fit: cover;
-            background: #e2e8f0;
-        }
-        .leader-card .photo-placeholder {
-            width: 100%;
-            height: 100%;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 2.5rem;
-            font-weight: 800;
-            color: var(--rotary-blue);
-            background: #e2e8f0;
-        }
-        .leader-card .role-badge {
-            display: inline-block;
-            font-size: 0.7rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 1.5px;
-            padding: 5px 14px;
-            border-radius: 100px;
-            background: linear-gradient(135deg, var(--rotary-yellow), #ffb347);
-            color: var(--rotary-blue);
-            margin-bottom: 10px;
-        }
-        .leader-card h4 {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--rotary-blue);
-            margin-bottom: 4px;
-        }
-        .leader-card .contact-info {
-            margin-top: 12px;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .leader-card .contact-info a,
-        .leader-card .contact-info span {
-            font-size: 0.85rem;
-            color: #64748b;
-            text-decoration: none;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            transition: color 0.3s;
-        }
-        .leader-card .contact-info a:hover {
-            color: var(--rotary-yellow);
         }
 
         /* ===== CONTACT INFO CARDS ===== */
@@ -761,8 +681,8 @@ function getDefaultBio($role) {
     <header class="sticky top-0 z-40 bg-white shadow-md">
         <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-10 h-10 rounded-full object-cover">
-                <span class="text-xl font-extrabold tracking-tight" style="color: var(--rotary-blue);">Rotary Club of Virar</span>
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="w-10 h-10 rounded-full object-cover">
+                <span class="text-xl font-extrabold tracking-tight" style="color: var(--rotary-blue);"><?= e($ws['website_name']) ?></span>
             </div>
             <div class="hidden lg:flex flex-1 justify-center space-x-8">
                 <a href="index.php" class="nav-link">Home</a>
@@ -796,7 +716,7 @@ function getDefaultBio($role) {
 
     <main>
         <!-- HERO -->
-        <section class="hero-section" id="hero">
+        <section class="hero-section" id="hero"<?php if ($contactHeroBgImage): ?> style="background:linear-gradient(135deg, #0A2342 0%, #1e3a5f 40%, #2d1b69 100%), url('<?= e($contactHeroBgImage) ?>') center/cover no-repeat;background-blend-mode:overlay;"<?php endif; ?>>
             <div class="hero-overlay"></div>
             <div class="hero-bg-shapes">
                 <div class="hero-shape hero-shape-1"></div>
@@ -807,14 +727,14 @@ function getDefaultBio($role) {
 
             <div class="relative z-10 text-center px-4 max-w-5xl mx-auto py-20 md:py-0">
                 <div class="hero-rotary-badge">
-                    <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" onerror="this.style.display='none'">
-                    <span>Rotary Club of Virar</span>
+                    <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?>" onerror="this.style.display='none'">
+                    <span><?= e($contactHeroBadge) ?></span>
                 </div>
                 <h1 class="hero-title">
-                    Let's <span class="highlight">Connect</span>
+                    <?= $contactHeroHeading ?>
                 </h1>
                 <p class="hero-subtitle">
-                    <?= e($contactDescription ?: "We're here to listen, collaborate, and make a difference. Reach out to us anytime — your ideas and feedback matter.") ?>
+                    <?= e($contactHeroDescription) ?>
                 </p>
             </div>
             <div class="hero-scroll-indicator" onclick="document.getElementById('contact-section').scrollIntoView({behavior:'smooth'})">
@@ -825,26 +745,26 @@ function getDefaultBio($role) {
         <!-- CONTACT INFO CARDS -->
         <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20" id="contact-section">
             <div class="section-title-wrap fade-in-up">
-                <div class="section-badge">Get In Touch</div>
-                <h2 class="section-title">How to Reach Us</h2>
+                <div class="section-badge"><?= e($contactSectionBadge) ?></div>
+                <h2 class="section-title"><?= e($contactSectionHeading) ?></h2>
                 <div class="section-title-line"></div>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-4xl mx-auto">
                 <div class="contact-info-card fade-in-scale" style="transition-delay: 0s">
-                    <div class="icon-wrap"><i class="fas fa-phone-alt"></i></div>
-                    <h4>Call Us</h4>
-                    <a href="tel:<?= CLUB_PHONE ?>"><?= CLUB_PHONE ?></a>
+                    <div class="icon-wrap"><i class="<?= e($contactCard1Icon) ?>"></i></div>
+                    <h4><?= e($contactCard1Title) ?></h4>
+                    <a href="tel:<?= e($contactCard1Value ?: CLUB_PHONE) ?>"><?= e($contactCard1Value ?: CLUB_PHONE) ?></a>
                 </div>
                 <div class="contact-info-card fade-in-scale" style="transition-delay: 0.1s">
-                    <div class="icon-wrap"><i class="fas fa-envelope"></i></div>
-                    <h4>Email Us</h4>
-                    <a href="mailto:<?= CLUB_EMAIL ?>"><?= CLUB_EMAIL ?></a>
+                    <div class="icon-wrap"><i class="<?= e($contactCard2Icon) ?>"></i></div>
+                    <h4><?= e($contactCard2Title) ?></h4>
+                    <a href="mailto:<?= e($contactCard2Value ?: CLUB_EMAIL) ?>"><?= e($contactCard2Value ?: CLUB_EMAIL) ?></a>
                 </div>
                 <div class="contact-info-card fade-in-scale" style="transition-delay: 0.2s">
-                    <div class="icon-wrap"><i class="fas fa-map-marker-alt"></i></div>
-                    <h4>Visit Us</h4>
-                    <p><?= CLUB_ADDRESS ?></p>
+                    <div class="icon-wrap"><i class="<?= e($contactCard3Icon) ?>"></i></div>
+                    <h4><?= e($contactCard3Title) ?></h4>
+                    <p><?= e($contactCard3Value ?: CLUB_ADDRESS) ?></p>
                 </div>
             </div>
         </section>
@@ -855,8 +775,8 @@ function getDefaultBio($role) {
                 <!-- Contact Form -->
                 <div class="lg:col-span-2 form-card fade-in-left">
                     <div class="section-title-wrap text-left mb-8" style="text-align:left;">
-                        <div class="section-badge">Send a Message</div>
-                        <h2 class="section-title" style="font-size:1.8rem;">We'd Love to Hear From You</h2>
+                        <div class="section-badge"><?= e($contactFormBadge) ?></div>
+                        <h2 class="section-title" style="font-size:1.8rem;"><?= e($contactFormHeading) ?></h2>
                         <div class="section-title-line" style="margin:12px 0 0;"></div>
                     </div>
 
@@ -888,13 +808,13 @@ function getDefaultBio($role) {
                 <!-- Social Media Sidebar -->
                 <div class="flex flex-col gap-6">
                     <div class="social-media-card fade-in-right">
-                        <div class="section-badge mb-4">Follow Us</div>
-                        <h3 class="text-xl font-bold mb-6" style="color:var(--rotary-blue);">Stay Connected</h3>
+                        <div class="section-badge mb-4"><?= e($contactFollowBadge) ?></div>
+                        <h3 class="text-xl font-bold mb-6" style="color:var(--rotary-blue);"><?= e($contactFollowHeading) ?></h3>
                         <div class="flex justify-center gap-6">
-                            <a href="<?= CLUB_FACEBOOK_URL ?>" target="_blank" rel="noopener noreferrer" class="social-icon-lg" aria-label="Facebook">
+                            <a href="<?= e($contactFacebookUrl ?: CLUB_FACEBOOK_URL) ?>" target="_blank" rel="noopener noreferrer" class="social-icon-lg" aria-label="Facebook">
                                 <i class="fab fa-facebook-f"></i>
                             </a>
-                            <a href="<?= CLUB_INSTAGRAM_URL ?>" target="_blank" rel="noopener noreferrer" class="social-icon-lg" aria-label="Instagram">
+                            <a href="<?= e($contactInstagramUrl ?: CLUB_INSTAGRAM_URL) ?>" target="_blank" rel="noopener noreferrer" class="social-icon-lg" aria-label="Instagram">
                                 <i class="fab fa-instagram"></i>
                             </a>
                         </div>
@@ -902,16 +822,16 @@ function getDefaultBio($role) {
 
                     <!-- Official Emails -->
                     <div class="social-media-card fade-in-right" style="transition-delay:0.1s;">
-                        <div class="section-badge mb-4">Official</div>
-                        <h3 class="text-xl font-bold mb-4" style="color:var(--rotary-blue);">Other Inquiries</h3>
+                        <div class="section-badge mb-4"><?= e($contactInquiriesBadge) ?></div>
+                        <h3 class="text-xl font-bold mb-4" style="color:var(--rotary-blue);"><?= e($contactInquiriesHeading) ?></h3>
                         <div class="space-y-4 text-left">
                             <div>
                                 <p class="text-sm text-gray-500 font-medium">General</p>
-                                <a href="mailto:<?= CLUB_EMAIL ?>" class="text-sm font-semibold hover:text-[var(--rotary-yellow)] transition"><?= CLUB_EMAIL ?></a>
+                                <a href="mailto:<?= e($contactGeneralEmail ?: CLUB_EMAIL) ?>" class="text-sm font-semibold hover:text-[var(--rotary-yellow)] transition"><?= e($contactGeneralEmail ?: CLUB_EMAIL) ?></a>
                             </div>
                             <div>
                                 <p class="text-sm text-gray-500 font-medium">Youth</p>
-                                <a href="mailto:rotaractclubvirar3141@gmail.com" class="text-sm font-semibold hover:text-[var(--rotary-yellow)] transition">rotaryvirar.youth@gmail.com</a>
+                                <a href="mailto:<?= e($contactYouthEmail ?: 'rotaryvirar.youth@gmail.com') ?>" class="text-sm font-semibold hover:text-[var(--rotary-yellow)] transition"><?= e($contactYouthEmail ?: 'rotaryvirar.youth@gmail.com') ?></a>
                             </div>
                         </div>
                     </div>
@@ -919,106 +839,25 @@ function getDefaultBio($role) {
             </div>
         </section>
 
-        <!-- LEADERSHIP SECTION -->
-        <section class="bg-gray-50 py-20">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="section-title-wrap fade-in-up">
-                    <div class="section-badge">Core Leadership</div>
-                    <h2 class="section-title">Connect with Our Leaders</h2>
-                    <div class="section-title-line"></div>
-                </div>
-
-                <div class="leadership-grid">
-                    <?php if (!empty($leadership)): ?>
-                        <?php foreach ($leadership as $idx => $m): 
-                            $img = getPhotoUrl($m['photo_url'] ?? '');
-                            $initials = '';
-                            if (!empty($m['name'])) {
-                                $parts = explode(' ', $m['name']);
-                                foreach ($parts as $p) if (!empty(trim($p))) $initials .= strtoupper($p[0]);
-                            }
-                            $bio = !empty($m['bio']) ? $m['bio'] : getDefaultBio($m['role']);
-                            $email = $m['email'] ?? '';
-                            $phone = $m['phone_number'] ?? '';
-                        ?>
-                        <div class="leader-card fade-in-scale" style="transition-delay: <?= $idx * 0.1 ?>s">
-                            <div class="card-glow"></div>
-                            <div class="photo-wrap">
-                                <?php if ($img): ?>
-                                    <img src="<?= e($img) ?>" alt="<?= e($m['name']) ?>">
-                                <?php else: ?>
-                                    <div class="photo-placeholder"><?= e($initials ?: '?') ?></div>
-                                <?php endif; ?>
-                            </div>
-                            <div class="role-badge"><?= e($m['role']) ?></div>
-                            <h4><?= e($m['name']) ?></h4>
-                            <p class="text-sm text-gray-500 px-2"><?= e($bio) ?></p>
-                            <div class="contact-info">
-                                <?php if ($email): ?>
-                                    <a href="mailto:<?= e($email) ?>"><i class="fas fa-envelope"></i> <?= e($email) ?></a>
-                                <?php endif; ?>
-                                <?php if ($phone): ?>
-                                    <span><i class="fas fa-phone"></i> <?= e($phone) ?></span>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <!-- Static fallback if no DB data -->
-                        <div class="leader-card fade-in-scale">
-                            <div class="card-glow"></div>
-                            <div class="photo-wrap"><div class="photo-placeholder">UK</div></div>
-                            <div class="role-badge">President</div>
-                            <h4>Rtn. Urmila Katkar</h4>
-                            <p class="text-sm text-gray-500 px-2">Leading with vision, guiding the club toward meaningful service and community impact.</p>
-                            <div class="contact-info">
-                                <a href="mailto:urmilaask555@gmail.com"><i class="fas fa-envelope"></i> urmilaask555@gmail.com</a>
-                            </div>
-                        </div>
-                        <div class="leader-card fade-in-scale" style="transition-delay:0.1s">
-                            <div class="card-glow"></div>
-                            <div class="photo-wrap"><div class="photo-placeholder">PS</div></div>
-                            <div class="role-badge">Secretary</div>
-                            <h4>Rtn. Prashant Satvi</h4>
-                            <p class="text-sm text-gray-500 px-2">Ensuring seamless communication, records, and operational excellence for the club.</p>
-                            <div class="contact-info">
-                                <a href="mailto:prashantsatvi@gmail.com"><i class="fas fa-envelope"></i> prashantsatvi@gmail.com</a>
-                            </div>
-                        </div>
-                        <div class="leader-card fade-in-scale" style="transition-delay:0.2s">
-                            <div class="card-glow"></div>
-                            <div class="photo-wrap"><div class="photo-placeholder">PP</div></div>
-                            <div class="role-badge">Treasurer</div>
-                            <h4>Rtn. Priya Purandare</h4>
-                            <p class="text-sm text-gray-500 px-2">Managing club finances with transparency, integrity, and responsible stewardship.</p>
-                            <div class="contact-info">
-                                <a href="mailto:purandarepriya@gmail.com"><i class="fas fa-envelope"></i> purandarepriya@gmail.com</a>
-                            </div>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </section>
-
         <!-- MAP SECTION -->
         <section class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-20">
             <div class="section-title-wrap fade-in-up">
-                <div class="section-badge">Our Location</div>
-                <h2 class="section-title">Find Us Here</h2>
+                <div class="section-badge"><?= e($contactLocationBadge) ?></div>
+                <h2 class="section-title"><?= e($contactLocationHeading) ?></h2>
                 <div class="section-title-line"></div>
             </div>
 
             <div class="map-card max-w-5xl mx-auto fade-in-up">
                 <div class="w-full h-80 rounded-xl overflow-hidden mb-6">
-                    <iframe src="https://www.google.com/maps?q=<?= urlencode(CLUB_ADDRESS) ?>&output=embed" width="100%" height="100%" style="border:0;" allowfullscreen="" loading="lazy"></iframe>
+                    <iframe src="<?= e($contactMapEmbedUrl ?: 'https://www.google.com/maps?q=' . urlencode($contactAddress ?: CLUB_ADDRESS) . '&output=embed') ?>" width="100%" height="100%" style="border:0;" allowfullscreen="" loading="lazy"></iframe>
                 </div>
                 <p class="text-center text-gray-600 font-medium flex items-center justify-center gap-2 mb-4">
                     <i class="fas fa-map-pin text-red-500"></i>
-                    <?= CLUB_ADDRESS ?>
+                    <?= e($contactAddress ?: CLUB_ADDRESS) ?>
                 </p>
                 <div class="flex justify-center">
-                    <a href="<?= CLUB_MAP_URL ?>" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-6 py-3 bg-[var(--rotary-blue)] text-white rounded-xl hover:bg-blue-900 transition duration-300 font-medium text-sm shadow-lg">
-                        <i class="fas fa-map-marked-alt"></i> View on Map
+                    <a href="<?= e($contactMapBtnUrl ?: CLUB_MAP_URL) ?>" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-6 py-3 bg-[var(--rotary-blue)] text-white rounded-xl hover:bg-blue-900 transition duration-300 font-medium text-sm shadow-lg">
+                        <i class="fas fa-map-marked-alt"></i> <?= e($contactMapBtnText) ?>
                     </a>
                 </div>
             </div>
@@ -1033,10 +872,10 @@ function getDefaultBio($role) {
                     </div>
                 </div>
                 <blockquote class="text-2xl md:text-4xl font-bold text-white leading-tight mb-6" style="font-family: 'Playfair Display', serif;">
-                    "Service Above Self"
+                    <?= e($contactQuoteText) ?>
                 </blockquote>
                 <p class="text-lg text-white/60 font-light max-w-2xl mx-auto">
-                    The heart of Rotary beats through the dedication of its members — ordinary people doing extraordinary things for the greater good.
+                    <?= e($contactQuoteDescription) ?>
                 </p>
             </div>
         </section>

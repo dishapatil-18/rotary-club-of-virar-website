@@ -2,8 +2,11 @@
 require_once __DIR__ . '/includes/session_security.php';
 secureSessionStart();
 require __DIR__ . '/includes/db_connect.php';
-require_once __DIR__ . '/includes/send_email.php';
+require_once __DIR__ . '/includes/communication_engine.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$_ws = getWebsiteSettings($conn);
 
 $message = '';
 $error = '';
@@ -37,29 +40,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $insertStmt->execute();
             $insertStmt->close();
 
-            $resetLink = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://$_SERVER[HTTP_HOST]" . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/') . "/reset_password.php?token=" . urlencode($token);
+            $resetLink = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') . "://{$_SERVER['HTTP_HOST']}" . rtrim(dirname($_SERVER['SCRIPT_NAME']), '/') . "/reset_password.php?token=" . urlencode($token);
 
             $emailBody = "
-                <div style='font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;'>
-                    <div style='text-align: center; margin-bottom: 20px;'>
-                        <h2 style='color: #0A2342;'>Rotary Club of Virar</h2>
-                        <p style='color: #64748b;'>Admin Password Reset</p>
-                    </div>
-                    <div style='background: #f8fafc; border-radius: 12px; padding: 24px; border: 1px solid #e2e8f0;'>
-                        <p>Hello " . htmlspecialchars($admin['name']) . ",</p>
-                        <p>We received a request to reset your admin password. Click the button below to set a new password:</p>
-                        <div style='text-align: center; margin: 24px 0;'>
-                            <a href='" . $resetLink . "' style='display: inline-block; padding: 14px 32px; background: #FFC000; color: #0A2342; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 16px;'>Reset Password</a>
-                        </div>
-                        <p style='color: #94a3b8; font-size: 14px;'>This link expires in 30 minutes. If you did not request this, please ignore this email.</p>
-                    </div>
-                    <div style='text-align: center; margin-top: 20px; color: #94a3b8; font-size: 12px;'>
-                        <p>Rotary Club of Virar &bull; Service Above Self</p>
-                    </div>
+                <p>Hello " . htmlspecialchars($admin['name']) . ",</p>
+                <p>We received a request to reset your admin password. Click the button below to set a new password:</p>
+                <div style='text-align: center; margin: 24px 0;'>
+                    <a href='" . $resetLink . "' style='display: inline-block; padding: 14px 32px; background: #FFC000; color: #0A2342; text-decoration: none; border-radius: 8px; font-weight: 700; font-size: 16px;'>Reset Password</a>
                 </div>
+                <p style='color: #94a3b8; font-size: 14px;'>This link expires in 30 minutes. If you did not request this, please ignore this email.</p>
             ";
 
-            $sendResult = sendEmail($email, 'Password Reset - Rotary Club Virar Admin', $emailBody);
+            $sendResult = commSendEmail($conn, $email, 'Password Reset - ' . e($_ws['website_short_name']) . ' Admin', $emailBody, 'Authentication', 'Password Reset Requested', 'Password reset link sent to ' . $email);
 
             if ($sendResult['success']) {
                 $message = "Password reset link has been sent to your email.";
@@ -85,7 +77,7 @@ $conn->query("DELETE FROM password_reset_tokens WHERE expires_at < NOW()");
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Forgot Password - Rotary Club Virar</title>
+<title>Forgot Password - <?= e($_ws['website_short_name']) ?></title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">

@@ -4,13 +4,21 @@ if (!isset($pageTitle)) $pageTitle = 'Rotary Club Admin';
 // Session timeout check (30 min)
 require_once __DIR__ . '/../../includes/session_security.php';
 checkSessionTimeout(30);
+
+// Load website settings for dynamic favicon/title
+require_once __DIR__ . '/../../includes/db_connect.php';
+require_once __DIR__ . '/../../includes/website_settings.php';
+$_ws = getWebsiteSettings($conn);
+$_wsTitle = $wsTitle ?? $_ws['browser_title'];
+$_wsFavicon = $_ws['website_favicon'];
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= htmlspecialchars($pageTitle) ?> | Rotary Club Virar</title>
+    <link rel="icon" type="image/x-icon" href="<?= htmlspecialchars($_wsFavicon) ?>">
+    <title><?= htmlspecialchars($pageTitle) ?> | <?= htmlspecialchars($_ws['website_short_name']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">

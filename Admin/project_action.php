@@ -12,10 +12,18 @@ if (!isset($_SESSION['admin_id'])) {
 
 // Include DB connection
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
+
+// Fetch rotary years for dropdown
+$allYears = [];
+$yrRes = $conn->query("SELECT id, year_name, is_current FROM rotary_years ORDER BY year_name DESC");
+if ($yrRes) {
+    while ($y = $yrRes->fetch_assoc()) $allYears[] = $y;
+}
 
 // Initialize variables
 $editMode = false;
-$project_id = $title = $description = $start_date = $end_date = $status = $image_url = $collaborator = "";
+$project_id = $title = $description = $start_date = $end_date = $status = $image_url = $collaborator = $year_id = "";
 
 // ======================
 // ADD / EDIT FORM SUBMIT
@@ -27,6 +35,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $end_date = $_POST['end_date'];
     $status = $_POST['status'];
     $collaborator = trim($_POST['collaborator'] ?? '');
+    $year_id = !empty($_POST['year_id']) ? intval($_POST['year_id']) : null;
 
     // Handle image upload (optional)
     if (!empty($_FILES['image']['name'])) {
@@ -44,10 +53,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // INSERT new project
     if (isset($_POST['add_project'])) {
-        $stmt = $conn->prepare("INSERT INTO projects (title, description, start_date, end_date, status, image_url, collaborator) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("sssssss", $title, $description, $start_date, $end_date, $status, $image_url, $collaborator);
+        $stmt = $conn->prepare("INSERT INTO projects (title, description, start_date, end_date, status, image_url, collaborator, year_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param("sssssssi", $title, $description, $start_date, $end_date, $status, $image_url, $collaborator, $year_id);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Projects', 'Project Added', 'Added project "' . $title . '".', 'INFO', 'success');
         echo "<script>alert('✅ Project added successfully!'); window.location.href='project_action.php';</script>";
         exit;
     }
@@ -55,10 +65,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // UPDATE existing project
     if (isset($_POST['update_project']) && isset($_POST['project_id'])) {
         $pid = intval($_POST['project_id']);
-        $stmt = $conn->prepare("UPDATE projects SET title=?, description=?, start_date=?, end_date=?, status=?, image_url=?, collaborator=? WHERE project_id=?");
-        $stmt->bind_param("sssssssi", $title, $description, $start_date, $end_date, $status, $image_url, $collaborator, $pid);
+        $stmt = $conn->prepare("UPDATE projects SET title=?, description=?, start_date=?, end_date=?, status=?, image_url=?, collaborator=?, year_id=? WHERE project_id=?");
+        $stmt->bind_param("sssssssii", $title, $description, $start_date, $end_date, $status, $image_url, $collaborator, $year_id, $pid);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Projects', 'Project Updated', 'Updated project ID ' . $pid . ' ("' . $title . '").', 'INFO', 'success');
         echo "<script>alert('✅ Project updated successfully!'); window.location.href='project_action.php';</script>";
         exit;
     }
@@ -73,6 +84,7 @@ if (isset($_GET['delete'])) {
     $stmt->bind_param("i", $delete_id);
     $stmt->execute();
     $stmt->close();
+    logAudit($conn, 'Projects', 'Project Deleted', 'Deleted project ID ' . $delete_id . '.', 'WARNING', 'success');
     echo "<script>alert('🗑️ Project deleted successfully!'); window.location.href='project_action.php';</script>";
     exit;
 }
@@ -97,6 +109,7 @@ if (isset($_GET['edit'])) {
         $status = $row['status'];
         $image_url = $row['image_url'];
         $collaborator = $row['collaborator'];
+        $year_id = $row['year_id'] ?? '';
     }
     $stmt->close();
 }
@@ -148,6 +161,15 @@ require __DIR__ . '/includes/admin_header.php';
                 </div>
             </div>
 
+            <div>
+                <label class="form-label">Rotary Year</label>
+                <select name="year_id" class="form-select">
+                    <option value="">-- Select Year --</option>
+                    <?php foreach ($allYears as $y): ?>
+                    <option value="<?= $y['id'] ?>" <?= ($year_id == $y['id'] || (empty($year_id) && $y['is_current'])) ? 'selected' : '' ?>><?= htmlspecialchars($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
             <div>
                 <label class="form-label">Status</label>
                 <select name="status" required class="form-select">

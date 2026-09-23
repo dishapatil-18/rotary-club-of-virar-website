@@ -3,6 +3,10 @@ require_once __DIR__ . '/includes/session_security.php';
 secureSessionStart();
 require __DIR__ . '/includes/db_connect.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+require_once __DIR__ . '/includes/audit_log.php';
+$_ws = getWebsiteSettings($conn);
 
 $message = '';
 $error = '';
@@ -74,6 +78,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $markStmt->execute();
                 $markStmt->close();
 
+                $resetAdminName = 'Admin';
+                $getNameStmt = $conn->prepare("SELECT name FROM admins WHERE admin_id = ?");
+                $getNameStmt->bind_param("i", $tokenRow['admin_id']);
+                $getNameStmt->execute();
+                $nameResult = $getNameStmt->get_result();
+                if ($nameRow = $nameResult->fetch_assoc()) {
+                    $resetAdminName = $nameRow['name'] ?? 'Admin';
+                }
+                $getNameStmt->close();
+                logAudit($conn, 'Authentication', 'Password Reset', 'Password reset completed for "' . $resetAdminName . '".', 'CRITICAL', 'success', $tokenRow['admin_id'], $resetAdminName);
+
                 $message = "Password has been reset successfully. You can now login.";
                 $showForm = false;
 
@@ -95,7 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Reset Password - Rotary Club Virar</title>
+<title>Reset Password - <?= e($_ws['website_short_name']) ?></title>
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">

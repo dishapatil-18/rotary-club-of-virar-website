@@ -1,12 +1,33 @@
 <?php
+require_once __DIR__ . '/../includes/helpers.php';
+
 function isSuperAdmin() {
     return isset($_SESSION['admin_role']) && $_SESSION['admin_role'] === 'super_admin';
+}
+
+function isContactMessagesAllowed() {
+    if (isSuperAdmin()) return true;
+    $allowedRoles = ['President', 'Secretary', 'Treasurer'];
+    return isset($_SESSION['admin_role']) && in_array($_SESSION['admin_role'], $allowedRoles);
 }
 
 function requireSuperAdmin() {
     if (!isSuperAdmin()) {
         header('Content-Type: application/json; charset=utf-8');
         echo json_encode(['success' => false, 'message' => 'Access denied. Super Admin only.']);
+        exit;
+    }
+}
+
+function isCommitteeManagementAllowed() {
+    if (isSuperAdmin()) return true;
+    $allowed = ['Secretary'];
+    return isset($_SESSION['admin_role']) && in_array($_SESSION['admin_role'], $allowed);
+}
+
+function requireCommitteeAccess() {
+    if (!isCommitteeManagementAllowed()) {
+        echo "<script>alert('Access denied. Super Admin or Secretary only.'); window.location.href='dashboard.php';</script>";
         exit;
     }
 }
@@ -57,6 +78,52 @@ function getSiteContent($conn, $page) {
     return $content;
 }
 
-function e($s) {
-    return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8');
+/**
+ * Dynamically fetch the profile photo, name, and role for the currently logged-in admin.
+ *
+ * - Super Admin always sees the Rotary Club logo.
+ * - President / Secretary / Treasurer are looked up from the current year's
+ *   leadership assignment, pulling their name and photo from the members table.
+ *
+ * Returns: ['photo' => string, 'name' => string, 'role' => string]
+ */
+function getAdminProfileData($conn) {
+    $role = $_SESSION['admin_role'] ?? '';
+
+    // Super Admin → Rotary logo
+    if ($role === 'super_admin') {
+        return [
+            'photo' => '../assets/uploads/Logo/rotary-icon.png',
+            'name'  => 'Super Admin',
+            'role'  => 'Super Administrator',
+        ];
+    }
+
+    // Office bearers → look up current year leadership assignment
+    $allowed = ['President', 'Secretary', 'Treasurer'];
+    if (in_array($role, $allowed, true)) {
+        $year = getCurrentRotaryYear($conn);
+        if ($year) {
+            $leaders = getLeadershipForYear($conn, $year['id']);
+            foreach ($leaders as $l) {
+                if ($l['role'] === $role) {
+                    $photo = $l['photo_url']
+                        ? ('../' . $l['photo_url'])
+                        : '';
+                    return [
+                        'photo' => $photo,
+                        'name'  => $l['name'] ?: ($_SESSION['admin_name'] ?? 'Admin'),
+                        'role'  => $role,
+                    ];
+                }
+            }
+        }
+    }
+
+    // Fallback – use what is stored in session
+    return [
+        'photo' => $_SESSION['admin_photo'] ?? '',
+        'name'  => $_SESSION['admin_name'] ?? 'Admin',
+        'role'  => $_SESSION['admin_role'] ?? 'Administrator',
+    ];
 }

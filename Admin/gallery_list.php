@@ -5,6 +5,7 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 
 // Handle delete
 if (isset($_GET['delete'])) {
@@ -24,6 +25,7 @@ if (isset($_GET['delete'])) {
     $del->bind_param("i", $id);
     $del->execute();
     $del->close();
+    logAudit($conn, 'Gallery', 'Media Deleted', 'Deleted gallery media ID ' . $id . '.', 'WARNING', 'success');
     header("Location: gallery_list.php?deleted=1");
     exit;
 }

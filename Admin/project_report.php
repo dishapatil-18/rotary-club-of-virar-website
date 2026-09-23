@@ -9,6 +9,13 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 
+// Role-based access
+$allowedRoles = ['super_admin', 'President', 'Secretary', 'Treasurer'];
+if (!isset($_SESSION['admin_role']) || !in_array($_SESSION['admin_role'], $allowedRoles)) {
+    header("Location: dashboard.php");
+    exit;
+}
+
 require __DIR__ . '/../includes/db_connect.php';
 
 // Initialize vars

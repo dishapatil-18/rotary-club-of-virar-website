@@ -3,6 +3,9 @@ require_once __DIR__ . '/includes/session_security.php';
 secureSessionStart();
 require __DIR__ . '/includes/db_connect.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
+require_once __DIR__ . '/includes/website_settings.php';
+require_once __DIR__ . '/includes/audit_log.php';
+$_ws = getWebsiteSettings($conn);
 
 $error = "";
 
@@ -31,6 +34,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_SESSION['form_login_attempts'] < 
     } else {
 
         $stmt = $conn->prepare("SELECT admin_id, name, role, photo_url, password FROM admins WHERE email = ? AND status = 'active'");
+        if (!$stmt) {
+            $error = "System error. Please contact administrator.";
+        } else {
         $stmt->bind_param("s", $email);
         $stmt->execute();
         $result = $stmt->get_result();
@@ -51,20 +57,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_SESSION['form_login_attempts'] < 
                 $_SESSION['is_logged_in'] = true;
                 $_SESSION['last_activity'] = time();
 
+                logAudit($conn, 'Authentication', 'Login Success', 'Admin "' . $admin['name'] . '" logged in successfully.', 'INFO', 'success', $admin['admin_id'], $admin['name'], $admin['role']);
+
                 header("Location: Admin/dashboard.php");
                 exit;
 
             } else {
                 $_SESSION['form_login_attempts']++;
+                logAudit($conn, 'Authentication', 'Login Failure', 'Failed login attempt for "' . $email . '" — wrong password.', 'WARNING', 'failed');
                 $error = "Invalid password.";
             }
 
         } else {
             $_SESSION['form_login_attempts']++;
+            logAudit($conn, 'Authentication', 'Login Failure', 'Failed login attempt for "' . $email . '" — email not found.', 'WARNING', 'failed');
             $error = "Invalid email.";
         }
 
         $stmt->close();
+        }
     }
     }
 }
@@ -75,7 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $_SESSION['form_login_attempts'] < 
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rotary Club Admin Login</title>
+<title><?= htmlspecialchars($_ws['browser_title']) ?></title>
 
 <script src="https://cdn.tailwindcss.com"></script>
 <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
@@ -121,7 +132,7 @@ input:focus {
         <div class="w-16 h-16 bg-[var(--dark-blue)] rounded-full flex items-center justify-center mb-3">
             <i data-lucide="shield-check" class="w-8 h-8 text-yellow-400"></i>
         </div>
-        <h1 class="text-2xl font-extrabold text-[var(--dark-blue)] text-center">Rotary Club Virar</h1>
+        <h1 class="text-2xl font-extrabold text-[var(--dark-blue)] text-center"><?= htmlspecialchars($_ws['website_name']) ?></h1>
         <p class="text-sm text-gray-500 mt-1">Admin Dashboard Login</p>
     </div>
 
@@ -196,6 +207,5 @@ input:focus {
 <script>
 document.addEventListener('DOMContentLoaded', () => { lucide.createIcons(); });
 </script>
-
 </body>
 </html>

@@ -17,6 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $description    = trim($_POST['description'] ?? '');
     $media_date     = $_POST['media_date'] ?? null;
     $status         = $_POST['status'] ?? 'active';
+    $year_id        = !empty($_POST['year_id']) ? intval($_POST['year_id']) : null;
 
     if ($reference_type === 'project') {
         $reference_id = $_POST['project_id'] ?? '';
@@ -75,19 +76,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $conn->prepare("
                     INSERT INTO media_gallery
                     (reference_type, reference_id, title, description, media_type,
-                     media_path, uploaded_by, media_date, status)
-                    VALUES (?, ?, ?, ?, 'image', ?, 'Admin', ?, ?)
+                     media_path, uploaded_by, media_date, status, year_id)
+                    VALUES (?, ?, ?, ?, 'image', ?, 'Admin', ?, ?, ?)
                 ");
 
                 $stmt->bind_param(
-                    "sisssss",
+                    "sisssssi",
                     $reference_type,
                     $reference_id,
                     $title,
                     $description,
                     $relativePath,
                     $media_date,
-                    $status
+                    $status,
+                    $year_id
                 );
 
                 $stmt->execute();
@@ -103,6 +105,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $projects = mysqli_query($conn, "SELECT project_id, title FROM projects ORDER BY created_at DESC");
 $events   = mysqli_query($conn, "SELECT event_id, title, start_date FROM events ORDER BY start_date DESC");
 $anncs    = mysqli_query($conn, "SELECT announcement_id, message FROM announcements ORDER BY date_posted DESC");
+$allYears = [];
+$yrRes = $conn->query("SELECT id, year_name, is_current FROM rotary_years ORDER BY year_name DESC");
+if ($yrRes) {
+    while ($y = $yrRes->fetch_assoc()) $allYears[] = $y;
+}
 ?>
 <?php
 $pageTitle = 'Upload Media';
@@ -134,6 +141,15 @@ require __DIR__ . '/includes/admin_header.php';
                         <option value="project">Project</option>
                         <option value="event">Event</option>
                         <option value="announcement">Announcement</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="form-label">Rotary Year</label>
+                    <select name="year_id" class="form-select">
+                        <option value="">-- Select Year --</option>
+                        <?php foreach ($allYears as $y): ?>
+                        <option value="<?= $y['id'] ?>" <?= $y['is_current'] ? 'selected' : '' ?>><?= htmlspecialchars($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
+                        <?php endforeach; ?>
                     </select>
                 </div>
                 <div>

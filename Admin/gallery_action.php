@@ -5,6 +5,7 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 
 $action = $_REQUEST['action'] ?? 'list';
 
@@ -34,11 +35,12 @@ if ($action === 'store' && $_SERVER['REQUEST_METHOD'] === 'POST') {
         $fn = time() . '_' . bin2hex(random_bytes(6)) . '.' . $ext;
         if (move_uploaded_file($_FILES['media_file']['tmp_name'], $uploads_dir . $fn)) {
             $media_url = 'uploads/gallery/' . $fn;
-            $stmt = $conn->prepare("INSERT INTO gallery_media (title, caption, media_type, category, media_url, thumbnail_url, uploaded_by, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
+            $stmt = $conn->prepare("INSERT INTO media_gallery (title, caption, media_type, category, media_url, thumbnail_url, uploaded_by, upload_date) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())");
             $thumb = $media_type === 'video' ? null : $media_url;
             $stmt->bind_param("sssssss", $title, $caption, $media_type, $category, $media_url, $thumb, $uploaded_by);
             $stmt->execute();
             $stmt->close();
+            logAudit($conn, 'Gallery', 'Media Uploaded', 'Uploaded gallery media "' . $title . '".', 'INFO', 'success');
             header("Location: gallery_list.php");
             exit;
         }

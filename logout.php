@@ -1,6 +1,10 @@
 <?php
 require_once __DIR__ . '/includes/session_security.php';
 secureSessionStart();
+require_once __DIR__ . '/includes/db_connect.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$_ws = getWebsiteSettings($conn);
 
 // If already confirmed, destroy session now
 if (isset($_GET['confirm']) && $_GET['confirm'] === '1') {
@@ -14,7 +18,7 @@ if (isset($_GET['confirm']) && $_GET['confirm'] === '1') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Logout - Rotary Club Virar</title>
+    <title>Logout - <?= e($_ws['website_short_name']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">

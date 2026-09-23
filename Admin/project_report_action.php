@@ -9,7 +9,15 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 
+// Role-based access
+$allowedRoles = ['super_admin', 'President', 'Secretary', 'Treasurer'];
+if (!isset($_SESSION['admin_role']) || !in_array($_SESSION['admin_role'], $allowedRoles)) {
+    header("Location: dashboard.php");
+    exit;
+}
+
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 
 // Initialize vars
 $report_id = $project_id = $year = $summary = $funds_raised = $expenditure = $achievements = "";
@@ -69,6 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_report']) || iss
         $stmt->bind_param("isssss", $project_id, $year, $summary, $funds_raised, $expenditure, $achievements);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Projects', 'Project Report Added', 'Added project report for project ID ' . $project_id . '.', 'INFO', 'success');
         echo "<script>alert('✅ Project report added successfully!'); window.location.href='project_report_action.php';</script>";
         exit;
     }
@@ -82,6 +91,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_report']) || iss
         $stmt->bind_param("isssssi", $project_id, $year, $summary, $funds_raised, $expenditure, $achievements, $rid);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Projects', 'Project Report Updated', 'Updated project report ID ' . $rid . '.', 'INFO', 'success');
         echo "<script>alert('✅ Report updated successfully!'); window.location.href='project_report_action.php';</script>";
         exit;
     }
@@ -94,6 +104,7 @@ if (isset($_GET['delete'])) {
     $stmt->bind_param("i", $delete_id);
     $stmt->execute();
     $stmt->close();
+    logAudit($conn, 'Projects', 'Project Report Deleted', 'Deleted project report ID ' . $delete_id . '.', 'WARNING', 'success');
 
     echo "<script>alert('🗑️ Report deleted successfully!'); window.location.href='project_report_action.php';</script>";
     exit;

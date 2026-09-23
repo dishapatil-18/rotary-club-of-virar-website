@@ -12,10 +12,18 @@ if (!isset($_SESSION['admin_id'])) {
 
 // Include DB connection
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
+
+// Fetch rotary years for dropdown
+$allYears = [];
+$yrRes = $conn->query("SELECT id, year_name, is_current FROM rotary_years ORDER BY year_name DESC");
+if ($yrRes) {
+    while ($y = $yrRes->fetch_assoc()) $allYears[] = $y;
+}
 
 // Init
 $editMode = false;
-$event_id = $title = $description = $start_date = $end_date = $image_url = $location = $category = $status = "";
+$event_id = $title = $description = $start_date = $end_date = $image_url = $location = $category = $status = $year_id = "";
 
 // ---------- HANDLE POST: Add / Update Event ----------
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_event']) || isset($_POST['update_event']))) {
@@ -58,13 +66,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_event']) || isse
         }
     }
 
+    $year_id = !empty($_POST['year_id']) ? intval($_POST['year_id']) : null;
+
     // INSERT new event
     if (isset($_POST['add_event'])) {
-        $stmt = $conn->prepare("INSERT INTO events (title, description, start_date, end_date, location, category, image_url) VALUES (?, ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("sssssss", $title, $description, $start_date, $end_date, $location, $category, $uploadedImagePath);
+        $stmt = $conn->prepare("INSERT INTO events (title, description, start_date, end_date, location, category, image_url, year_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
+        $stmt->bind_param("sssssssi", $title, $description, $start_date, $end_date, $location, $category, $uploadedImagePath, $year_id);
 
         if ($stmt->execute()) {
             $stmt->close();
+            logAudit($conn, 'Events', 'Event Added', 'Added event "' . $title . '".', 'INFO', 'success');
             echo "<script>alert('✅ Event added successfully'); window.location.href='event_action.php';</script>";
             exit;
         } else {
@@ -78,11 +89,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['add_event']) || isse
     // UPDATE event
     if (isset($_POST['update_event']) && !empty($_POST['event_id'])) {
         $eid = intval($_POST['event_id']);
-        $stmt = $conn->prepare("UPDATE events SET title=?, description=?, start_date=?, end_date=?, image_url=?, location=?, category=? WHERE event_id=?");
-        $stmt->bind_param("sssssssi", $title, $description, $start_date, $end_date, $uploadedImagePath, $location, $category, $eid);
+        $stmt = $conn->prepare("UPDATE events SET title=?, description=?, start_date=?, end_date=?, image_url=?, location=?, category=?, year_id=? WHERE event_id=?");
+        $stmt->bind_param("sssssssii", $title, $description, $start_date, $end_date, $uploadedImagePath, $location, $category, $year_id, $eid);
 
         if ($stmt->execute()) {
             $stmt->close();
+            logAudit($conn, 'Events', 'Event Updated', 'Updated event ID ' . $eid . ' ("' . $title . '").', 'INFO', 'success');
             echo "<script>alert('✅ Event updated successfully'); window.location.href='event_action.php';</script>";
             exit;
         } else {
@@ -112,6 +124,7 @@ if (isset($_GET['delete'])) {
 
     if ($stmt->execute()) {
         $stmt->close();
+        logAudit($conn, 'Events', 'Event Deleted', 'Deleted event ID ' . $del_id . '.', 'WARNING', 'success');
 
         if ($img && file_exists(__DIR__ . '/../' . $img)) {
             @unlink(__DIR__ . '/../' . $img);
@@ -147,6 +160,7 @@ if (isset($_GET['edit'])) {
         $image_url = $row['image_url'];
         $location = $row['location'];
         $category = $row['category'];
+        $year_id = $row['year_id'] ?? '';
     }
     $stmt->close();
 }
@@ -200,6 +214,15 @@ require __DIR__ . '/includes/admin_header.php';
             <div>
                 <label class="form-label">Location</label>
                 <input type="text" name="location" value="<?= htmlspecialchars($location) ?>" class="form-input" />
+            </div>
+            <div>
+                <label class="form-label">Rotary Year</label>
+                <select name="year_id" class="form-select">
+                    <option value="">-- Select Year --</option>
+                    <?php foreach ($allYears as $y): ?>
+                    <option value="<?= $y['id'] ?>" <?= ($year_id == $y['id'] || (empty($year_id) && $y['is_current'])) ? 'selected' : '' ?>><?= htmlspecialchars($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
+                    <?php endforeach; ?>
+                </select>
             </div>
             <div>
                 <label class="form-label">Category</label>

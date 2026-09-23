@@ -3,43 +3,99 @@ session_start();
 include 'includes/db_connect.php';
 require_once __DIR__ . '/config/club_settings.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
-function e($s) {
-    return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8');
+function aboutImg($path) {
+    if (!$path) return '';
+    if (str_starts_with($path, '../')) return substr($path, 3);
+    return $path;
 }
-
 function getSiteContent($conn, $page) {
-    $r = $conn->query("SELECT section, content FROM site_content WHERE page = '$page'");
+    $stmt = $conn->prepare("SELECT section, content FROM site_content WHERE page = ?");
+    $stmt->bind_param("s", $page);
+    $stmt->execute();
+    $r = $stmt->get_result();
     $content = [];
     if ($r) {
         while ($row = $r->fetch_assoc()) $content[$row['section']] = $row['content'];
     }
+    $stmt->close();
     return $content;
 }
 $aboutContent = getSiteContent($conn, 'about');
-$aboutDescription = $aboutContent['about_description'] ?? '';
 
 // Query project count for impact section
 $totalProjects = 0;
 $r = $conn->query("SELECT COUNT(*) AS c FROM projects");
 if ($r) { $totalProjects = (int)$r->fetch_assoc()['c']; }
 
-$focusAreas = [
-    ['icon' => 'fa-graduation-cap', 'title' => 'Education', 'desc' => 'Empowering students and youth through scholarships, digital literacy programs, and educational infrastructure support to build a brighter future.'],
-    ['icon' => 'fa-heartbeat', 'title' => 'Healthcare', 'desc' => 'Organizing health check-up camps, blood donation drives, and wellness awareness programs for communities in need.'],
-    ['icon' => 'fa-tree', 'title' => 'Environment', 'desc' => 'Promoting tree plantation drives, waste management awareness, and sustainability initiatives for a greener planet.'],
-    ['icon' => 'fa-fist-raised', 'title' => 'Women Empowerment', 'desc' => 'Conducting skill development workshops, self-defense training, and awareness programs to empower women.'],
-    ['icon' => 'fa-users', 'title' => 'Youth Development', 'desc' => 'Mentoring young leaders through leadership camps, career guidance sessions, and Rotary youth exchange programs.'],
-    ['icon' => 'fa-home', 'title' => 'Community Welfare', 'desc' => 'Supporting local communities with food drives, disaster relief, sanitation projects, and infrastructure improvements.'],
-    ['icon' => 'fa-dove', 'title' => 'Peace and Harmony', 'desc' => 'Promoting understanding, goodwill, and harmony through service, collaboration, and community engagement.'],
-];
+// ---------- Hero ----------
+$heroBg = aboutImg($aboutContent['hero_bg_image'] ?? '');
+$heroLogo = aboutImg($aboutContent['hero_logo'] ?? 'assets/uploads/Logo/rotary-icon.png');
+$heroHeading = $aboutContent['hero_heading'] ?? 'About Rotary Club of <span class="highlight">Virar</span>';
+$heroDescription = $aboutContent['hero_description'] ?? 'Dedicated to Service Above Self, creating lasting impact through community service, education, healthcare, environmental initiatives, and humanitarian projects.';
+
+// ---------- Our Club, Our Mission ----------
+$missionBadge = $aboutContent['mission_badge'] ?? 'Who We Are';
+$missionHeading = $aboutContent['mission_heading'] ?? 'Our Club, Our Mission';
+$missionDescription = $aboutContent['about_description'] ?? '';
+$missionImage = aboutImg($aboutContent['mission_image'] ?? 'assets/uploads/Logo/rotary-icon.png');
+
+// ---------- Mission Value Cards ----------
+$valueCards = [];
+for ($i = 1; $i <= 3; $i++) {
+    $valueCards[] = [
+        'icon' => $aboutContent['value_icon_' . $i] ?? '',
+        'title' => $aboutContent['value_title_' . $i] ?? '',
+        'desc' => $aboutContent['value_desc_' . $i] ?? '',
+    ];
+}
+
+// ---------- Our Impact ----------
+$impactBadge = $aboutContent['impact_badge'] ?? 'Our Impact';
+$impactHeading = $aboutContent['impact_heading'] ?? 'Making a Difference Together';
+$impactCards = [];
+for ($i = 1; $i <= 3; $i++) {
+    $impactCards[] = [
+        'icon' => $aboutContent['impact_icon_' . $i] ?? '',
+        'number' => $aboutContent['impact_number_' . $i] ?? '',
+        'title' => $aboutContent['impact_title_' . $i] ?? '',
+        'desc' => $aboutContent['impact_desc_' . $i] ?? '',
+    ];
+}
+$impactBottomText = $aboutContent['impact_bottom_text'] ?? '';
+
+// ---------- Areas of Impact ----------
+$focusAreas = [];
+for ($i = 1; $i <= 7; $i++) {
+    $focusAreas[] = [
+        'icon' => $aboutContent['focus_icon_' . $i] ?? '',
+        'title' => $aboutContent['focus_title_' . $i] ?? '',
+        'desc' => $aboutContent['focus_desc_' . $i] ?? '',
+    ];
+}
+
+// ---------- Founder Quote ----------
+$quoteText = $aboutContent['quote_text'] ?? '';
+$quoteAuthor = $aboutContent['quote_author'] ?? '';
+
+// ---------- CTA ----------
+$ctaBg = aboutImg($aboutContent['cta_bg_image'] ?? '');
+$ctaHeading = $aboutContent['cta_heading'] ?? 'Ready to Be Part of Something Bigger?';
+$ctaDescription = $aboutContent['cta_description'] ?? '';
+$ctaBtn1Text = $aboutContent['cta_btn1_text'] ?? 'Join Rotary Club of Virar';
+$ctaBtn1Link = $aboutContent['cta_btn1_link'] ?? 'https://form.jotform.com/203628680518460';
+$ctaBtn2Text = $aboutContent['cta_btn2_text'] ?? 'Contact Us';
+$ctaBtn2Link = $aboutContent['cta_btn2_link'] ?? 'contact.php';
 ?>
 <!DOCTYPE html>
 <html lang="en" class="scroll-smooth">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>About Rotary Club of Virar</title>
+    <title>About <?= e($ws['website_name']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
@@ -519,8 +575,8 @@ $focusAreas = [
     <header class="sticky top-0 z-40 bg-white shadow-md">
         <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-10 h-10 rounded-full object-cover">
-                <span class="text-xl font-extrabold tracking-tight" style="color: var(--rotary-blue);">Rotary Club of Virar</span>
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="w-10 h-10 rounded-full object-cover">
+                <span class="text-xl font-extrabold tracking-tight" style="color: var(--rotary-blue);"><?= e($ws['website_name']) ?></span>
             </div>
             <div class="hidden lg:flex flex-1 justify-center space-x-8">
                 <a href="index.php" class="nav-link">Home</a>
@@ -555,6 +611,9 @@ $focusAreas = [
     <main>
         <!-- HERO -->
         <section class="hero-section" id="hero">
+            <?php if ($heroBg): ?>
+            <div class="absolute inset-0 bg-cover bg-center" style="background-image: url('<?= e($heroBg) ?>'); opacity: 0.15;"></div>
+            <?php endif; ?>
             <div class="hero-overlay"></div>
             <div class="hero-bg-shapes">
                 <div class="hero-shape hero-shape-1"></div>
@@ -565,14 +624,14 @@ $focusAreas = [
 
             <div class="relative z-10 text-center px-4 max-w-5xl mx-auto py-20 md:py-0">
                 <div class="hero-rotary-badge">
-                    <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" onerror="this.style.display='none'">
+                    <img src="<?= e($heroLogo) ?>" alt="Rotary Logo" onerror="this.style.display='none'">
                     <span>Rotary Club of Virar</span>
                 </div>
                 <h1 class="hero-title">
-                    About Rotary Club of <span class="highlight">Virar</span>
+                    <?= $heroHeading ?>
                 </h1>
                 <p class="hero-subtitle">
-                    Dedicated to Service Above Self, creating lasting impact through community service, education, healthcare, environmental initiatives, and humanitarian projects.
+                    <?= e($heroDescription) ?>
                 </p>
             </div>
             <div class="hero-scroll-indicator" onclick="document.getElementById('who-we-are').scrollIntoView({behavior:'smooth'})">
@@ -580,22 +639,30 @@ $focusAreas = [
             </div>
         </section>
 
+        <?php
+        $valueDefaults = [
+            ['icon' => 'fas fa-handshake', 'title' => 'Fellowship', 'desc' => 'Building meaningful connections among members through camaraderie, mutual respect, and shared purpose to create a strong, united community of service leaders.'],
+            ['icon' => 'fas fa-shield-alt', 'title' => 'Integrity', 'desc' => 'Upholding the highest ethical standards in all our actions, ensuring transparency, honesty, and accountability in every service project we undertake.'],
+            ['icon' => 'fas fa-globe-asia', 'title' => 'Service', 'desc' => 'Dedicating ourselves to humanitarian service that improves lives, strengthens communities, and advances global understanding and peace.'],
+        ];
+        $missionDesc = $missionDescription;
+        ?>
         <!-- WHO WE ARE -->
         <section class="py-20" id="who-we-are">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="section-title-wrap fade-in-up">
-                    <div class="section-badge">Who We Are</div>
-                    <h2 class="section-title">Our Club, Our Mission</h2>
+                    <div class="section-badge"><?= e($missionBadge) ?></div>
+                    <h2 class="section-title"><?= e($missionHeading) ?></h2>
                     <div class="section-title-line"></div>
                 </div>
 
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center mb-16">
                     <div class="fade-in-left">
-                        <?php if (!empty($aboutDescription)): ?>
-                        <p class="text-gray-600 leading-relaxed mb-6"><?= nl2br(e($aboutDescription)) ?></p>
+                        <?php if (!empty($missionDesc)): ?>
+                        <p class="text-gray-600 leading-relaxed mb-6"><?= nl2br(e($missionDesc)) ?></p>
                         <?php else: ?>
                         <p class="text-gray-600 leading-relaxed mb-6">
-                            Rotary Club of Virar is a collective of passionate individuals committed to driving meaningful social change through innovation, compassion, and community service. We believe that small actions, when multiplied by many, can transform lives.
+                            <?= e($ws['website_name']) ?> is a collective of passionate individuals committed to driving meaningful social change through innovation, compassion, and community service. We believe that small actions, when multiplied by many, can transform lives.
                         </p>
                         <p class="text-gray-600 leading-relaxed mb-6">
                             As part of Rotary International, we are guided by the timeless principle of <strong>"Service Above Self"</strong> — dedicating our time, talents, and resources to serve our community and foster goodwill across borders.
@@ -606,85 +673,87 @@ $focusAreas = [
                         <?php endif; ?>
                     </div>
                     <div class="fade-in-right">
-                        <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Club of Virar" class="w-48 h-48 rounded-full mx-auto object-cover shadow-2xl border-4 border-[var(--rotary-yellow)]">
+                        <img src="<?= e($missionImage) ?>" alt="Rotary Club of Virar" class="w-48 h-48 rounded-full mx-auto object-cover shadow-2xl border-4 border-[var(--rotary-yellow)]">
                     </div>
                 </div>
 
                 <!-- Values Cards -->
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div class="content-card fade-in-scale" style="transition-delay:0s">
+                    <?php for ($vi = 0; $vi < 3; $vi++):
+                        $vc = $valueCards[$vi];
+                        $vIcon = $vc['icon'] ?: $valueDefaults[$vi]['icon'];
+                        $vTitle = $vc['title'] ?: $valueDefaults[$vi]['title'];
+                        $vDesc = $vc['desc'] ?: $valueDefaults[$vi]['desc'];
+                    ?>
+                    <div class="content-card fade-in-scale" style="transition-delay:<?= $vi * 0.1 ?>s">
                         <div class="flex items-center gap-4 mb-4">
                             <div class="w-12 h-12 rounded-full flex items-center justify-center text-xl" style="background:rgba(255,192,0,0.15);color:var(--rotary-yellow);">
-                                <i class="fas fa-handshake"></i>
+                                <i class="<?= e($vIcon) ?>"></i>
                             </div>
-                            <h3 class="text-lg font-bold">Fellowship</h3>
+                            <h3 class="text-lg font-bold"><?= e($vTitle) ?></h3>
                         </div>
-                        <p class="text-sm text-gray-500">Building meaningful connections among members through camaraderie, mutual respect, and shared purpose to create a strong, united community of service leaders.</p>
+                        <p class="text-sm text-gray-500"><?= e($vDesc) ?></p>
                     </div>
-                    <div class="content-card fade-in-scale" style="transition-delay:0.1s">
-                        <div class="flex items-center gap-4 mb-4">
-                            <div class="w-12 h-12 rounded-full flex items-center justify-center text-xl" style="background:rgba(255,192,0,0.15);color:var(--rotary-yellow);">
-                                <i class="fas fa-shield-alt"></i>
-                            </div>
-                            <h3 class="text-lg font-bold">Integrity</h3>
-                        </div>
-                        <p class="text-sm text-gray-500">Upholding the highest ethical standards in all our actions, ensuring transparency, honesty, and accountability in every service project we undertake.</p>
-                    </div>
-                    <div class="content-card fade-in-scale" style="transition-delay:0.2s">
-                        <div class="flex items-center gap-4 mb-4">
-                            <div class="w-12 h-12 rounded-full flex items-center justify-center text-xl" style="background:rgba(255,192,0,0.15);color:var(--rotary-yellow);">
-                                <i class="fas fa-globe-asia"></i>
-                            </div>
-                            <h3 class="text-lg font-bold">Service</h3>
-                        </div>
-                        <p class="text-sm text-gray-500">Dedicating ourselves to humanitarian service that improves lives, strengthens communities, and advances global understanding and peace.</p>
-                    </div>
+                    <?php endfor; ?>
                 </div>
             </div>
         </section>
 
+        <?php
+        $impactDefaults = [
+            ['icon' => 'fas fa-handshake', 'number' => (string)$totalProjects, 'title' => 'Community Projects', 'desc' => 'Driving meaningful change through service projects that strengthen communities and improve lives.'],
+            ['icon' => 'fas fa-heartbeat', 'number' => '500+', 'title' => 'Health Beneficiaries', 'desc' => 'Providing accessible healthcare services and wellness programs to underserved communities.'],
+            ['icon' => 'fas fa-tree', 'number' => '500+', 'title' => 'Trees Planted', 'desc' => 'Contributing to a greener planet through tree plantation drives and environmental awareness.'],
+        ];
+        $impactColors = ['#FFC000', '#F87171', '#10B981'];
+        $impactColorsBg = ['#FFC00020', '#F8717120', '#10B98120'];
+        ?>
         <!-- OUR IMPACT -->
         <section class="py-20 bg-gray-50">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="section-title-wrap fade-in-up">
-                    <div class="section-badge">Our Impact</div>
-                    <h2 class="section-title">Making a Difference Together</h2>
+                    <div class="section-badge"><?= e($impactBadge) ?></div>
+                    <h2 class="section-title"><?= e($impactHeading) ?></h2>
                     <div class="section-title-line"></div>
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <div class="impact-card fade-in-scale">
-                        <div class="impact-icon" style="background: #FFC00020; color: #FFC000;">
-                            <i class="fas fa-handshake"></i>
+                    <?php for ($ii = 0; $ii < 3; $ii++):
+                        $ic = $impactCards[$ii];
+                        $iIcon = $ic['icon'] ?: $impactDefaults[$ii]['icon'];
+                        $iNumber = $ic['number'] ?: $impactDefaults[$ii]['number'];
+                        $iTitle = $ic['title'] ?: $impactDefaults[$ii]['title'];
+                        $iDesc = $ic['desc'] ?: $impactDefaults[$ii]['desc'];
+                        $delay = $ii * 0.08;
+                    ?>
+                    <div class="impact-card fade-in-scale" style="transition-delay:<?= $delay ?>s">
+                        <div class="impact-icon" style="background: <?= $impactColorsBg[$ii] ?>; color: <?= $impactColors[$ii] ?>;">
+                            <i class="fas <?= e($iIcon) ?>"></i>
                         </div>
-                        <div class="impact-count" style="color: #FFC000;"><?= $totalProjects ?></div>
-                        <h4>Community Projects</h4>
-                        <p>Driving meaningful change through service projects that strengthen communities and improve lives.</p>
+                        <div class="impact-count" style="color: <?= $impactColors[$ii] ?>;"><?= e($iNumber) ?></div>
+                        <h4><?= e($iTitle) ?></h4>
+                        <p><?= e($iDesc) ?></p>
                     </div>
-                    <div class="impact-card fade-in-scale" style="transition-delay:0.08s">
-                        <div class="impact-icon" style="background: #F8717120; color: #F87171;">
-                            <i class="fas fa-heartbeat"></i>
-                        </div>
-                        <div class="impact-count" style="color: #F87171;">500+</div>
-                        <h4>Health Beneficiaries</h4>
-                        <p>Providing accessible healthcare services and wellness programs to underserved communities.</p>
-                    </div>
-                    <div class="impact-card fade-in-scale" style="transition-delay:0.16s">
-                        <div class="impact-icon" style="background: #10B98120; color: #10B981;">
-                            <i class="fas fa-tree"></i>
-                        </div>
-                        <div class="impact-count" style="color: #10B981;">500+</div>
-                        <h4>Trees Planted</h4>
-                        <p>Contributing to a greener planet through tree plantation drives and environmental awareness.</p>
-                    </div>
+                    <?php endfor; ?>
                 </div>
 
                 <div class="text-center mt-12 fade-in-up">
-                    <p class="text-gray-500 text-lg">Through <strong class="text-[var(--rotary-blue)]"><?= $totalProjects ?>+ projects</strong> and countless volunteer hours, we are making a lasting impact in the Virar region and beyond.</p>
+                    <p class="text-gray-500 text-lg"><?= $impactBottomText ?: 'Through <strong class="text-[var(--rotary-blue)]">' . $totalProjects . '+ projects</strong> and countless volunteer hours, we are making a lasting impact in the Virar region and beyond.' ?></p>
                 </div>
             </div>
         </section>
 
+        <?php
+        $focusDefaults = [
+            ['icon' => 'fa-graduation-cap', 'title' => 'Education', 'desc' => 'Empowering students and youth through scholarships, digital literacy programs, and educational infrastructure support to build a brighter future.'],
+            ['icon' => 'fa-heartbeat', 'title' => 'Healthcare', 'desc' => 'Organizing health check-up camps, blood donation drives, and wellness awareness programs for communities in need.'],
+            ['icon' => 'fa-tree', 'title' => 'Environment', 'desc' => 'Promoting tree plantation drives, waste management awareness, and sustainability initiatives for a greener planet.'],
+            ['icon' => 'fa-fist-raised', 'title' => 'Women Empowerment', 'desc' => 'Conducting skill development workshops, self-defense training, and awareness programs to empower women.'],
+            ['icon' => 'fa-users', 'title' => 'Youth Development', 'desc' => 'Mentoring young leaders through leadership camps, career guidance sessions, and Rotary youth exchange programs.'],
+            ['icon' => 'fa-home', 'title' => 'Community Welfare', 'desc' => 'Supporting local communities with food drives, disaster relief, sanitation projects, and infrastructure improvements.'],
+            ['icon' => 'fa-dove', 'title' => 'Peace and Harmony', 'desc' => 'Promoting understanding, goodwill, and harmony through service, collaboration, and community engagement.'],
+        ];
+        ?>
         <!-- AREAS OF FOCUS -->
         <section class="py-20">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -695,11 +764,15 @@ $focusAreas = [
                 </div>
 
                 <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-                    <?php foreach ($focusAreas as $fa): ?>
+                    <?php foreach ($focusAreas as $fi => $fa):
+                        $fIcon = $fa['icon'] ?: $focusDefaults[$fi]['icon'];
+                        $fTitle = $fa['title'] ?: $focusDefaults[$fi]['title'];
+                        $fDesc = $fa['desc'] ?: $focusDefaults[$fi]['desc'];
+                    ?>
                     <div class="focus-card fade-in-scale">
-                        <div class="focus-icon"><i class="fas <?= $fa['icon'] ?>"></i></div>
-                        <h4><?= $fa['title'] ?></h4>
-                        <p><?= $fa['desc'] ?></p>
+                        <div class="focus-icon"><i class="fas <?= e($fIcon) ?>"></i></div>
+                        <h4><?= e($fTitle) ?></h4>
+                        <p><?= e($fDesc) ?></p>
                     </div>
                     <?php endforeach; ?>
                 </div>
@@ -715,29 +788,32 @@ $focusAreas = [
                     </div>
                 </div>
                 <blockquote class="text-2xl md:text-4xl font-bold text-white leading-tight mb-6" style="font-family: 'Playfair Display', serif;">
-                    "Success is not measured by wealth, but by the positive impact you have on others."
+                    "<?= e($quoteText ?: 'Success is not measured by wealth, but by the positive impact you have on others.') ?>"
                 </blockquote>
                 <p class="text-lg text-white/60 font-light max-w-2xl mx-auto">
-                    ~ Adv. Rtn. Paul Harris, Founder of Rotary
+                    <?= e($quoteAuthor ?: '~ Adv. Rtn. Paul Harris, Founder of Rotary') ?>
                 </p>
             </div>
         </section>
 
         <!-- CTA SECTION -->
         <section class="cta-section py-16 md:py-20 px-4">
+            <?php if ($ctaBg): ?>
+            <div class="absolute inset-0 bg-cover bg-center" style="background-image: url('<?= e($ctaBg) ?>'); opacity: 0.1;"></div>
+            <?php endif; ?>
             <div class="relative z-10 max-w-4xl mx-auto text-center">
                 <h2 class="text-3xl md:text-4xl font-bold mb-4" style="color: var(--rotary-blue); font-family: 'Playfair Display', serif;">
-                    Ready to Be Part of Something Bigger?
+                    <?= e($ctaHeading) ?>
                 </h2>
                 <p class="text-lg mb-8" style="color: var(--rotary-blue); opacity: 0.8;">
-                    Join Rotary Club of Virar and help us create lasting change in our community.
+                    <?= e($ctaDescription ?: 'Join Rotary Club of Virar and help us create lasting change in our community.') ?>
                 </p>
                 <div class="flex flex-wrap justify-center gap-4">
-                    <a href="https://form.jotform.com/203628680518460" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-8 py-4 rounded-full text-base font-bold cta-btn">
-                        <i class="fas fa-user-plus"></i> Join Rotary Club of Virar
+                    <a href="<?= e($ctaBtn1Link) ?>" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-2 px-8 py-4 rounded-full text-base font-bold cta-btn">
+                        <i class="fas fa-user-plus"></i> <?= e($ctaBtn1Text) ?>
                     </a>
-                    <a href="contact.php" class="inline-flex items-center gap-2 px-8 py-4 rounded-full text-base font-bold cta-btn-outline">
-                        <i class="fas fa-envelope"></i> Contact Us
+                    <a href="<?= e($ctaBtn2Link) ?>" class="inline-flex items-center gap-2 px-8 py-4 rounded-full text-base font-bold cta-btn-outline">
+                        <i class="fas fa-envelope"></i> <?= e($ctaBtn2Text) ?>
                     </a>
                 </div>
             </div>

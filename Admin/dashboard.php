@@ -6,43 +6,35 @@ if (!isset($_SESSION['admin_id'])) {
 }
 include __DIR__ . '/../includes/db_connect.php';
 require_once __DIR__ . '/admin_functions.php';
+require_once __DIR__ . '/../includes/website_settings.php';
+require_once __DIR__ . '/includes/action_center.php';
+$_ws = getWebsiteSettings($conn);
 
-// Fetch real dashboard stats
-$totalProjects = 0;
-$r = $conn->query("SELECT COUNT(*) as c FROM projects");
-if ($r) { $totalProjects = $r->fetch_assoc()['c']; }
+$profile = getAdminProfileData($conn);
+$adminRole = $_SESSION['admin_role'] ?? '';
 
-$totalEvents = 0;
-$r = $conn->query("SELECT COUNT(*) as c FROM events");
-if ($r) { $totalEvents = $r->fetch_assoc()['c']; }
+$actionCards = getActionCards($conn, $adminRole);
+$totalActions = count($actionCards);
+$quickActions = getQuickActions($adminRole);
 
 $totalMembers = 0;
 $r = $conn->query("SELECT COUNT(*) as c FROM members");
 if ($r) { $totalMembers = $r->fetch_assoc()['c']; }
 
+$totalEvents = 0;
+$r = $conn->query("SELECT COUNT(*) as c FROM events");
+if ($r) { $totalEvents = $r->fetch_assoc()['c']; }
+
+$totalProjects = 0;
+$r = $conn->query("SELECT COUNT(*) as c FROM projects");
+if ($r) { $totalProjects = $r->fetch_assoc()['c']; }
+
 $totalDonations = 0;
 $r = $conn->query("SELECT COUNT(*) as c FROM donations");
 if ($r) { $totalDonations = $r->fetch_assoc()['c']; }
 
-$totalCollaborations = 0;
-$r = $conn->query("SELECT COUNT(*) as c FROM collaborations");
-if ($r) { $totalCollaborations = $r->fetch_assoc()['c']; }
-
-$contactMessages = 0;
-$contactUnread = 0;
-$r = $conn->query("SELECT COUNT(*) as c FROM contact_messages");
-if ($r) { $contactMessages = $r->fetch_assoc()['c']; }
-$r = $conn->query("SHOW COLUMNS FROM contact_messages LIKE 'status'");
-$hasStatusCol = $r && $r->num_rows > 0;
-if ($hasStatusCol) {
-    $r = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'Unread'");
-} else {
-    $r = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE is_read = 0");
-}
-if ($r) { $contactUnread = $r->fetch_assoc()['c']; }
-
 $totalDonationAmount = 0;
-$r = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM donations WHERE donation_type = 'Money'");
+$r = $conn->query("SELECT COALESCE(SUM(amount), 0) as total FROM donations WHERE donation_type = 'Monetary Donation'");
 if ($r) { $totalDonationAmount = round($r->fetch_assoc()['total']); }
 if ($totalDonationAmount >= 1000000) {
     $donationDisplay = '₹' . number_format($totalDonationAmount / 100000, 1) . 'L';
@@ -51,13 +43,26 @@ if ($totalDonationAmount >= 1000000) {
 } else {
     $donationDisplay = '₹' . $totalDonationAmount;
 }
+
+$contactUnread = 0;
+$r = $conn->query("SELECT COUNT(*) as c FROM contact_messages WHERE status = 'new'");
+if ($r) { $contactUnread = $r->fetch_assoc()['c']; }
+
+$upcomingEvents = [];
+$r = $conn->query("SELECT event_id, title, start_date, location FROM events WHERE start_date >= CURDATE() ORDER BY start_date ASC LIMIT 5");
+if ($r) { while ($row = $r->fetch_assoc()) { $upcomingEvents[] = $row; } }
+
+$recentAudit = [];
+if (isSuperAdmin()) {
+    $recentAudit = getRecentAuditActivity($conn, 5);
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rotary Club Admin Dashboard</title>
+    <title><?= htmlspecialchars($_ws['browser_title']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
@@ -85,7 +90,6 @@ if ($totalDonationAmount >= 1000000) {
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
 
-        /* ─── SIDEBAR ─── */
         .sidebar {
             position: fixed; top: 0; left: 0;
             width: var(--sidebar-w); height: 100vh;
@@ -161,7 +165,6 @@ if ($totalDonationAmount >= 1000000) {
         .sidebar-footer .nav-item { font-size: 12px; padding: 7px 12px; color: rgba(255,255,255,0.35); }
         .sidebar-footer .nav-item:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.05); }
 
-        /* ─── HEADER ─── */
         .top-header {
             position: fixed; top: 0; left: var(--sidebar-w); right: 0;
             height: var(--header-h);
@@ -198,7 +201,6 @@ if ($totalDonationAmount >= 1000000) {
         .admin-info-name { font-size: 13px; font-weight: 600; color: #0f172a; }
         .admin-info-role { font-size: 11px; color: #94a3b8; }
 
-        /* ─── MAIN ─── */
         .main-content {
             margin-left: var(--sidebar-w); margin-top: var(--header-h);
             padding: 28px 32px;
@@ -210,7 +212,6 @@ if ($totalDonationAmount >= 1000000) {
         }
         .page-subtitle { font-size: 14px; color: #64748b; margin: 0; }
 
-        /* ─── STAT CARDS ─── */
         .stat-card {
             background: white; border-radius: 14px; padding: 22px 24px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
@@ -236,7 +237,6 @@ if ($totalDonationAmount >= 1000000) {
             font-size: 13px; font-weight: 500; color: #64748b; margin-top: 3px;
         }
 
-        /* ─── CARDS ─── */
         .panel-card {
             background: white; border-radius: 14px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.05);
@@ -251,7 +251,6 @@ if ($totalDonationAmount >= 1000000) {
         }
         .panel-body { padding: 18px 24px 22px; }
 
-        /* ─── BUTTONS ─── */
         .btn {
             display: inline-flex; align-items: center; justify-content: center;
             gap: 6px; padding: 8px 16px; border-radius: 9px;
@@ -275,7 +274,6 @@ if ($totalDonationAmount >= 1000000) {
         .btn-lg { padding: 11px 22px; font-size: 14px; border-radius: 10px; }
         .btn-block { width: 100%; justify-content: center; }
 
-        /* ─── RESPONSIVE ─── */
         @media (max-width: 1024px) {
             .sidebar { transform: translateX(-100%); box-shadow: 4px 0 30px rgba(0,0,0,0.2); }
             .sidebar.open { transform: translateX(0); }
@@ -301,7 +299,6 @@ if ($totalDonationAmount >= 1000000) {
         @media (min-width: 768px) { .grid-quick { grid-template-columns: repeat(3, 1fr); } }
         @media (min-width: 1024px) { .grid-quick { grid-template-columns: repeat(5, 1fr); } }
 
-        /* Badge helpers */
         .badge {
             display: inline-flex; align-items: center;
             padding: 3px 11px; border-radius: 9999px;
@@ -312,6 +309,132 @@ if ($totalDonationAmount >= 1000000) {
         .badge-blue { background: #dbeafe; color: #1e40af; }
         .badge-red { background: #fee2e2; color: #991b1b; }
         .badge-gray { background: #f1f5f9; color: #475569; }
+
+        /* ─── ACTION CENTER ─── */
+        .action-card {
+            background: white;
+            border-radius: 14px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+            border: 1px solid rgba(241,245,249,0.7);
+            border-left: 4px solid #e2e8f0;
+            padding: 20px 22px;
+            transition: all 0.25s ease;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .action-card:hover {
+            box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+            transform: translateY(-2px);
+        }
+        .action-card-top {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .action-card-icon {
+            width: 44px; height: 44px; border-radius: 11px;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+        }
+        .action-card-icon svg { width: 22px; height: 22px; }
+        .action-card-count {
+            font-size: 22px; font-weight: 800; color: #0f172a;
+            line-height: 1; letter-spacing: -0.03em;
+        }
+        .action-card-title {
+            font-size: 14px; font-weight: 700; color: #0f172a;
+            margin: 0;
+        }
+        .action-card-desc {
+            font-size: 12.5px; color: #64748b; margin: 0;
+            line-height: 1.45;
+        }
+        .action-card-bottom {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-top: 4px;
+        }
+        .action-card-priority {
+            font-size: 9.5px; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.08em;
+            padding: 2px 8px; border-radius: 4px;
+        }
+        .action-btn {
+            display: inline-flex; align-items: center; gap: 5px;
+            padding: 6px 14px; border-radius: 7px;
+            font-size: 12px; font-weight: 600;
+            text-decoration: none; transition: all 0.15s ease;
+            border: none; cursor: pointer; font-family: inherit;
+        }
+        .action-btn:hover { transform: scale(1.03); }
+        .action-btn svg { width: 14px; height: 14px; }
+
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        @media (max-width: 768px) {
+            .action-grid { grid-template-columns: 1fr; }
+        }
+
+        .section-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 18px;
+        }
+        .section-title {
+            font-size: 18px; font-weight: 700; color: #0f172a; margin: 0;
+            display: flex; align-items: center; gap: 10px;
+        }
+        .section-title svg { width: 22px; height: 22px; color: var(--rotary-yellow); }
+
+        .empty-actions {
+            text-align: center; padding: 40px 20px;
+            background: white; border-radius: 14px;
+            border: 1px dashed #e2e8f0;
+        }
+        .empty-actions svg { width: 48px; height: 48px; color: #10b981; margin-bottom: 12px; opacity: 0.6; }
+        .empty-actions h3 { font-size: 16px; font-weight: 600; color: #10b981; margin: 0 0 4px; }
+        .empty-actions p { font-size: 13px; color: #94a3b8; margin: 0; }
+
+        .quick-action-card {
+            display: flex; align-items: center; gap: 12px;
+            padding: 16px 18px; border-radius: 12px;
+            text-decoration: none; transition: all 0.2s ease;
+            background: white;
+            border: 1px solid rgba(241,245,249,0.7);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+        }
+        .quick-action-card:hover {
+            box-shadow: 0 6px 16px rgba(0,0,0,0.07);
+            transform: translateY(-2px);
+        }
+        .quick-action-icon {
+            width: 40px; height: 40px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center;
+            flex-shrink: 0;
+        }
+        .quick-action-icon svg { width: 20px; height: 20px; }
+        .quick-action-label { font-size: 13.5px; font-weight: 600; color: #0f172a; }
+
+        .audit-row {
+            display: flex; align-items: flex-start; gap: 12px;
+            padding: 12px 0;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .audit-row:last-child { border-bottom: none; }
+        .audit-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            margin-top: 5px; flex-shrink: 0;
+        }
+        .audit-info { flex: 1; min-width: 0; }
+        .audit-action { font-size: 13px; font-weight: 600; color: #1e293b; }
+        .audit-desc { font-size: 12px; color: #64748b; margin-top: 2px; line-height: 1.4; }
+        .audit-meta { font-size: 11px; color: #94a3b8; margin-top: 4px; }
     </style>
 </head>
 <body>
@@ -320,20 +443,20 @@ if ($totalDonationAmount >= 1000000) {
 <div class="sidebar" id="sidebar">
     <div class="sidebar-logo">
         <div class="logo-wrap">
-            <img src="../assets/uploads/Logo/rotary-icon.png" alt="Rotary" onerror="this.outerHTML='<span style=font-size:20px;font-weight:800;color:#0A2342;>R</span>'">
+            <img src="../<?= htmlspecialchars($_ws['website_logo']) ?>" alt="<?= htmlspecialchars($_ws['website_short_name']) ?>" onerror="this.outerHTML='<span style=font-size:20px;font-weight:800;color:#0A2342;>R</span>'">
         </div>
         <div class="sidebar-logo-text">
-            <h1>Rotary Club Virar</h1>
+            <h1><?= htmlspecialchars($_ws['website_name']) ?></h1>
             <p>Admin Dashboard</p>
         </div>
     </div>
     <div class="sidebar-profile">
-        <img src="<?= htmlspecialchars($_SESSION['admin_photo'] ?? '../assets/uploads/admins/Admin.jpg') ?>" alt=""
+        <img src="<?= htmlspecialchars($profile['photo']) ?>" alt=""
              onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
         <div style="display:none;width:32px;height:32px;border-radius:50%;background:rgba(255,192,0,0.15);align-items:center;justify-content:center;color:#FFC000;font-size:14px;flex-shrink:0;">&#x1F464;</div>
         <div style="flex:1;min-width:0;">
-            <div class="sp-name"><?= htmlspecialchars($_SESSION['admin_name'] ?? 'Admin') ?></div>
-            <div class="sp-role"><?= htmlspecialchars($_SESSION['admin_role'] ?? 'Administrator') ?></div>
+            <div class="sp-name"><?= htmlspecialchars($profile['name']) ?></div>
+            <div class="sp-role"><?= htmlspecialchars($profile['role']) ?></div>
         </div>
     </div>
     <nav class="sidebar-nav">
@@ -358,13 +481,22 @@ if ($totalDonationAmount >= 1000000) {
             <a href="addEvent_poll.php" class="nav-item"><i data-lucide="vote"></i><span class="nav-label">Event Polls</span></a>
             <a href="pollVoter_list.php" class="nav-item"><i data-lucide="users"></i><span class="nav-label">Poll Voters</span></a>
         </div>
-        <?php if (isSuperAdmin()): ?>
+        <?php
+        $showContactMsgs = isSuperAdmin() || in_array($_SESSION['admin_role'], ['President', 'Secretary', 'Treasurer']);
+        if (isSuperAdmin() || $showContactMsgs):
+        ?>
         <div class="nav-section"><div class="nav-section-title">Administration</div>
+            <?php if (isSuperAdmin()): ?>
             <a href="admins_management.php" class="nav-item"><i data-lucide="shield"></i><span class="nav-label">Admin Accounts</span></a>
             <a href="rotary_years.php" class="nav-item"><i data-lucide="calendar"></i><span class="nav-label">Rotary Years</span></a>
             <a href="leadership_transfer.php" class="nav-item"><i data-lucide="users"></i><span class="nav-label">Leadership Management</span></a>
+            <a href="website_settings.php" class="nav-item"><i data-lucide="settings"></i><span class="nav-label">Website Settings</span></a>
             <a href="site_content.php" class="nav-item"><i data-lucide="edit"></i><span class="nav-label">Website Content</span></a>
+            <a href="contact_social_links.php" class="nav-item"><i data-lucide="share-2"></i><span class="nav-label">Contact & Social Links</span></a>
+            <?php endif; ?>
+            <?php if ($showContactMsgs): ?>
             <a href="contact_messages.php" class="nav-item"><i data-lucide="mail"></i><span class="nav-label">Contact Messages</span></a>
+            <?php endif; ?>
         </div>
         <?php endif; ?>
         <div class="nav-section"><div class="nav-section-title">System</div>
@@ -400,11 +532,11 @@ if ($totalDonationAmount >= 1000000) {
             <span style="display:block;">Logout</span>
         </a>
         <div class="admin-profile" onclick="window.location.href='change_password.php'">
-            <img src="<?= htmlspecialchars($_SESSION['admin_photo'] ?? '../assets/uploads/admins/Admin.jpg') ?>" alt="" class="admin-avatar"
+            <img src="<?= htmlspecialchars($profile['photo']) ?>" alt="" class="admin-avatar"
                  onerror="this.src='data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><rect width=%22100%22 height=%22100%22 rx=%2250%22 fill=%22%23e2e8f0%22/><text x=%2250%22 y=%2265%22 text-anchor=%22middle%22 font-size=%2240%22 fill=%22%2394a3b8%22>👤</text></svg>'">
             <div>
-                <div class="admin-info-name"><?= htmlspecialchars($_SESSION['admin_name'] ?? 'Admin') ?></div>
-                <div class="admin-info-role"><?= htmlspecialchars($_SESSION['admin_role'] ?? 'Administrator') ?></div>
+                <div class="admin-info-name"><?= htmlspecialchars($profile['name']) ?></div>
+                <div class="admin-info-role"><?= htmlspecialchars($profile['role']) ?></div>
             </div>
         </div>
     </div>
@@ -413,57 +545,135 @@ if ($totalDonationAmount >= 1000000) {
 <!-- ═══ MAIN CONTENT ═══ -->
 <main class="main-content">
     <div style="margin-bottom:28px;">
-        <h1 class="page-title">Dashboard Overview</h1>
-        <p class="page-subtitle">Welcome back, <?= htmlspecialchars($_SESSION['admin_name'] ?? 'Admin') ?>. Here's your club at a glance.</p>
+        <h1 class="page-title">Welcome, <?= htmlspecialchars($profile['name']) ?></h1>
+        <p class="page-subtitle">Here's what requires your attention right now.</p>
     </div>
 
-    <!-- ─── STAT CARDS ─── -->
-    <div class="grid-quick" style="margin-bottom:32px;">
-        <div class="stat-card fade-up">
-            <div class="stat-icon" style="background:#eef2ff;">
-                <i data-lucide="users" style="width:24px;height:24px;color:#4f46e5;"></i>
-            </div>
-            <div class="stat-value"><?= $totalMembers ?></div>
-            <div class="stat-label">Total Members</div>
+    <!-- ═══ ACTION CENTER ═══ -->
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="zap"></i>
+                Action Center
+            </h2>
+            <?php if ($totalActions > 0): ?>
+                <span class="badge badge-red" style="font-size:12px;padding:4px 14px;"><?= (int)$totalActions ?> pending</span>
+            <?php endif; ?>
         </div>
-        <div class="stat-card fade-up">
-            <div class="stat-icon" style="background:#fef9c3;">
-                <i data-lucide="calendar" style="width:24px;height:24px;color:#eab308;"></i>
+
+        <?php if ($totalActions === 0): ?>
+            <div class="empty-actions fade-up">
+                <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+                <h3>All caught up!</h3>
+                <p>No actions required at this time. Great work!</p>
             </div>
-            <div class="stat-value"><?= $totalEvents ?></div>
-            <div class="stat-label">Total Events</div>
+        <?php else: ?>
+            <div class="action-grid">
+                <?php foreach ($actionCards as $idx => $card):
+                    $ps = getPriorityStyles($card['priority']);
+                ?>
+                <div class="action-card fade-up" style="border-left-color:<?= htmlspecialchars($ps['border']) ?>;animation-delay:<?= round($idx * 0.05, 2) ?>s;">
+                    <div class="action-card-top">
+                        <div class="action-card-icon" style="background:<?= htmlspecialchars($ps['icon_bg']) ?>;">
+                            <i data-lucide="<?= htmlspecialchars($card['icon']) ?>" style="color:<?= htmlspecialchars($ps['icon_color']) ?>;"></i>
+                        </div>
+                        <div class="action-card-count"><?= (int)$card['count'] ?></div>
+                    </div>
+                    <div>
+                        <h3 class="action-card-title"><?= htmlspecialchars($card['title']) ?></h3>
+                        <p class="action-card-desc"><?= htmlspecialchars($card['description']) ?></p>
+                    </div>
+                    <div class="action-card-bottom">
+                        <span class="action-card-priority badge <?= htmlspecialchars($ps['badge']) ?>"><?= htmlspecialchars($ps['label']) ?></span>
+                        <a href="<?= htmlspecialchars($card['action_url']) ?>" class="action-btn" style="background:<?= htmlspecialchars($ps['border']) ?>;color:white;">
+                            <?= htmlspecialchars($card['action_text']) ?>
+                            <i data-lucide="arrow-right"></i>
+                        </a>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- ═══ QUICK ACTIONS ═══ -->
+    <?php if (!empty($quickActions)): ?>
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="rocket"></i>
+                Quick Actions
+            </h2>
         </div>
-        <div class="stat-card fade-up">
-            <div class="stat-icon" style="background:#dbeafe;">
-                <i data-lucide="folder" style="width:24px;height:24px;color:#2563eb;"></i>
-            </div>
-            <div class="stat-value"><?= $totalProjects ?></div>
-            <div class="stat-label">Total Projects</div>
+        <div class="action-grid" style="grid-template-columns:repeat(auto-fill,minmax(220px,1fr));">
+            <?php foreach ($quickActions as $qa): ?>
+            <a href="<?= htmlspecialchars($qa['url']) ?>" class="quick-action-card fade-up">
+                <div class="quick-action-icon" style="background:<?= htmlspecialchars($qa['bg']) ?>;">
+                    <i data-lucide="<?= htmlspecialchars($qa['icon']) ?>" style="color:<?= htmlspecialchars($qa['color']) ?>;"></i>
+                </div>
+                <span class="quick-action-label"><?= htmlspecialchars($qa['label']) ?></span>
+            </a>
+            <?php endforeach; ?>
         </div>
-        <div class="stat-card fade-up">
-            <div class="stat-icon" style="background:#d1fae5;">
-                <i data-lucide="heart-handshake" style="width:24px;height:24px;color:#10b981;"></i>
-            </div>
-            <div class="stat-value"><?= $totalDonations ?></div>
-            <div class="stat-label">Total Donations</div>
+    </div>
+    <?php endif; ?>
+
+    <!-- ═══ ROLE-SPECIFIC SECTIONS ═══ -->
+    <?php if (isSuperAdmin()): ?>
+    <!-- SUPER ADMIN: Statistics + Charts + Audit Activity -->
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="bar-chart-3"></i>
+                Club Statistics
+            </h2>
         </div>
-        <div class="stat-card fade-up">
-            <div class="stat-icon" style="background:#f3e8ff;">
-                <i data-lucide="handshake" style="width:24px;height:24px;color:#9333ea;"></i>
+        <div class="grid-quick" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#eef2ff;">
+                    <i data-lucide="users" style="width:24px;height:24px;color:#4f46e5;"></i>
+                </div>
+                <div class="stat-value"><?= (int)$totalMembers ?></div>
+                <div class="stat-label">Total Members</div>
             </div>
-            <div class="stat-value"><?= $totalCollaborations ?></div>
-            <div class="stat-label">Collaborations</div>
-        </div>
-        <div class="stat-card fade-up">
-            <div class="stat-icon" style="background:#fce7f3;">
-                <i data-lucide="mail" style="width:24px;height:24px;color:#ec4899;"></i>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fef9c3;">
+                    <i data-lucide="calendar" style="width:24px;height:24px;color:#eab308;"></i>
+                </div>
+                <div class="stat-value"><?= (int)$totalEvents ?></div>
+                <div class="stat-label">Total Events</div>
             </div>
-            <div class="stat-value"><?= $contactMessages ?><span style="font-size:14px;font-weight:500;color:#94a3b8;margin-left:4px;">/ <?= $contactUnread ?> unread</span></div>
-            <div class="stat-label">Contact Messages</div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#dbeafe;">
+                    <i data-lucide="folder" style="width:24px;height:24px;color:#2563eb;"></i>
+                </div>
+                <div class="stat-value"><?= (int)$totalProjects ?></div>
+                <div class="stat-label">Total Projects</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#d1fae5;">
+                    <i data-lucide="heart-handshake" style="width:24px;height:24px;color:#10b981;"></i>
+                </div>
+                <div class="stat-value"><?= (int)$totalDonations ?></div>
+                <div class="stat-label">Total Donations</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fce7f3;">
+                    <i data-lucide="indian-rupee" style="width:24px;height:24px;color:#ec4899;"></i>
+                </div>
+                <div class="stat-value"><?= htmlspecialchars($donationDisplay) ?></div>
+                <div class="stat-label">Donation Value</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fef2f2;">
+                    <i data-lucide="mail" style="width:24px;height:24px;color:#ef4444;"></i>
+                </div>
+                <div class="stat-value"><?= (int)$contactUnread ?></div>
+                <div class="stat-label">Unread Messages</div>
+            </div>
         </div>
     </div>
 
-    <!-- ─── CHARTS ROW ─── -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-bottom:32px;">
         <div class="panel-card fade-up">
             <div class="panel-header">
@@ -487,81 +697,198 @@ if ($totalDonationAmount >= 1000000) {
         </div>
     </div>
 
-    <!-- ─── QUICK ACCESS PANELS ─── -->
-    <h2 style="font-size:18px;font-weight:700;color:#0f172a;margin:0 0 16px;">Quick Actions</h2>
-    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px;margin-bottom:32px;">
-        <a href="project_action.php" class="panel-card" style="display:block;text-decoration:none;border-left:4px solid #eab308;padding:18px 20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="width:42px;height:42px;border-radius:10px;background:#fef9c3;display:flex;align-items:center;justify-content:center;">
-                    <i data-lucide="folder" style="width:20px;height:20px;color:#eab308;"></i>
+    <?php if (!empty($recentAudit)): ?>
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="scroll"></i>
+                Recent Audit Activity
+            </h2>
+            <a href="audit_logs.php" class="btn btn-ghost btn-sm">View All</a>
+        </div>
+        <div class="panel-card fade-up">
+            <div class="panel-body" style="padding:8px 24px 4px;">
+                <?php foreach ($recentAudit as $log):
+                    $dotColor = '#10b981';
+                    if ($log['severity'] === 'CRITICAL') { $dotColor = '#ef4444'; }
+                    elseif ($log['severity'] === 'WARNING') { $dotColor = '#f97316'; }
+                    elseif ($log['status'] === 'failed') { $dotColor = '#ef4444'; }
+                    $timeDiff = '';
+                    $now = new DateTime();
+                    $logTime = new DateTime($log['created_at']);
+                    $diffMins = $now->getTimestamp() - $logTime->getTimestamp();
+                    if ($diffMins < 60) { $timeDiff = max(1, intval($diffMins / 60)) . 'm ago'; }
+                    elseif ($diffMins < 86400) { $timeDiff = intval($diffMins / 3600) . 'h ago'; }
+                    else { $timeDiff = intval($diffMins / 86400) . 'd ago'; }
+                ?>
+                <div class="audit-row">
+                    <div class="audit-dot" style="background:<?= $dotColor ?>;"></div>
+                    <div class="audit-info">
+                        <div class="audit-action"><?= htmlspecialchars($log['action']) ?></div>
+                        <div class="audit-desc"><?= htmlspecialchars($log['description']) ?></div>
+                        <div class="audit-meta"><?= htmlspecialchars($log['admin_name']) ?> &middot; <?= htmlspecialchars($log['module']) ?> &middot; <?= htmlspecialchars($timeDiff) ?></div>
+                    </div>
+                    <span class="badge <?= $log['status'] === 'success' ? 'badge-green' : 'badge-red' ?>"><?= htmlspecialchars($log['status']) ?></span>
                 </div>
-                <div>
-                    <div style="font-size:14px;font-weight:600;color:#0f172a;">Manage Projects</div>
-                    <div style="font-size:12px;color:#64748b;">Add, edit & track projects</div>
-                </div>
+                <?php endforeach; ?>
             </div>
-        </a>
-        <a href="event_action.php" class="panel-card" style="display:block;text-decoration:none;border-left:4px solid #3b82f6;padding:18px 20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="width:42px;height:42px;border-radius:10px;background:#dbeafe;display:flex;align-items:center;justify-content:center;">
-                    <i data-lucide="calendar" style="width:20px;height:20px;color:#3b82f6;"></i>
-                </div>
-                <div>
-                    <div style="font-size:14px;font-weight:600;color:#0f172a;">Manage Events</div>
-                    <div style="font-size:12px;color:#64748b;">Plan & organize events</div>
-                </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <?php elseif ($_SESSION['admin_role'] === 'President'): ?>
+    <!-- PRESIDENT: Stats + Upcoming Events + Donations -->
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="bar-chart-3"></i>
+                Club Statistics
+            </h2>
+        </div>
+        <div class="grid-quick" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#eef2ff;"><i data-lucide="users" style="width:24px;height:24px;color:#4f46e5;"></i></div>
+                <div class="stat-value"><?= (int)$totalMembers ?></div>
+                <div class="stat-label">Total Members</div>
             </div>
-        </a>
-        <a href="member_action.php" class="panel-card" style="display:block;text-decoration:none;border-left:4px solid #10b981;padding:18px 20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="width:42px;height:42px;border-radius:10px;background:#d1fae5;display:flex;align-items:center;justify-content:center;">
-                    <i data-lucide="users" style="width:20px;height:20px;color:#10b981;"></i>
-                </div>
-                <div>
-                    <div style="font-size:14px;font-weight:600;color:#0f172a;">Manage Members</div>
-                    <div style="font-size:12px;color:#64748b;">Add & manage club members</div>
-                </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fef9c3;"><i data-lucide="calendar" style="width:24px;height:24px;color:#eab308;"></i></div>
+                <div class="stat-value"><?= (int)$totalEvents ?></div>
+                <div class="stat-label">Total Events</div>
             </div>
-        </a>
-        <a href="donation_action.php" class="panel-card" style="display:block;text-decoration:none;border-left:4px solid #ef4444;padding:18px 20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="width:42px;height:42px;border-radius:10px;background:#fee2e2;display:flex;align-items:center;justify-content:center;">
-                    <i data-lucide="heart-handshake" style="width:20px;height:20px;color:#ef4444;"></i>
-                </div>
-                <div>
-                    <div style="font-size:14px;font-weight:600;color:#0f172a;">Manage Donations</div>
-                    <div style="font-size:12px;color:#64748b;">Track donations & donors</div>
-                </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#dbeafe;"><i data-lucide="folder" style="width:24px;height:24px;color:#2563eb;"></i></div>
+                <div class="stat-value"><?= (int)$totalProjects ?></div>
+                <div class="stat-label">Total Projects</div>
             </div>
-        </a>
-        <a href="admin_add_media.php" class="panel-card" style="display:block;text-decoration:none;border-left:4px solid #8b5cf6;padding:18px 20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="width:42px;height:42px;border-radius:10px;background:#f3e8ff;display:flex;align-items:center;justify-content:center;">
-                    <i data-lucide="image" style="width:20px;height:20px;color:#8b5cf6;"></i>
-                </div>
-                <div>
-                    <div style="font-size:14px;font-weight:600;color:#0f172a;">Upload Media</div>
-                    <div style="font-size:12px;color:#64748b;">Add images to gallery</div>
-                </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#d1fae5;"><i data-lucide="heart-handshake" style="width:24px;height:24px;color:#10b981;"></i></div>
+                <div class="stat-value"><?= (int)$totalDonations ?></div>
+                <div class="stat-label">Total Donations</div>
             </div>
-        </a>
-        <a href="change_password.php" class="panel-card" style="display:block;text-decoration:none;border-left:4px solid #64748b;padding:18px 20px;">
-            <div style="display:flex;align-items:center;gap:12px;">
-                <div style="width:42px;height:42px;border-radius:10px;background:#f1f5f9;display:flex;align-items:center;justify-content:center;">
-                    <i data-lucide="settings" style="width:20px;height:20px;color:#64748b;"></i>
-                </div>
-                <div>
-                    <div style="font-size:14px;font-weight:600;color:#0f172a;">Settings</div>
-                    <div style="font-size:12px;color:#64748b;">Update password & profile</div>
-                </div>
-            </div>
-        </a>
+        </div>
     </div>
 
-    <!-- ─── FOOTER ─── -->
+    <?php if (!empty($upcomingEvents)): ?>
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="calendar-clock"></i>
+                Upcoming Events
+            </h2>
+            <a href="event_action.php" class="btn btn-ghost btn-sm">View All</a>
+        </div>
+        <div class="panel-card fade-up">
+            <div class="panel-body" style="padding:8px 24px 4px;">
+                <?php foreach ($upcomingEvents as $ev):
+                    $startDt = new DateTime($ev['start_date']);
+                    $now = new DateTime();
+                    $daysUntil = $now->diff($startDt)->days;
+                    $dateLabel = $daysUntil === 0 ? 'Today' : ($daysUntil === 1 ? 'Tomorrow' : "In $daysUntil days");
+                ?>
+                <div class="audit-row">
+                    <div class="audit-dot" style="background:<?= $daysUntil <= 1 ? '#ef4444' : '#3b82f6' ?>;"></div>
+                    <div class="audit-info">
+                        <div class="audit-action"><?= htmlspecialchars($ev['title']) ?></div>
+                        <div class="audit-desc"><?= htmlspecialchars($ev['location'] ?: 'No location set') ?></div>
+                        <div class="audit-meta"><?= htmlspecialchars($startDt->format('M d, Y')) ?> &middot; <?= htmlspecialchars($dateLabel) ?></div>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <?php elseif ($_SESSION['admin_role'] === 'Secretary'): ?>
+    <!-- SECRETARY: Events + Projects + Contacts -->
+    <?php if (!empty($upcomingEvents)): ?>
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="calendar-clock"></i>
+                Upcoming Events
+            </h2>
+            <a href="event_action.php" class="btn btn-ghost btn-sm">View All</a>
+        </div>
+        <div class="panel-card fade-up">
+            <div class="panel-body" style="padding:8px 24px 4px;">
+                <?php foreach ($upcomingEvents as $ev):
+                    $startDt = new DateTime($ev['start_date']);
+                    $now = new DateTime();
+                    $daysUntil = $now->diff($startDt)->days;
+                    $dateLabel = $daysUntil === 0 ? 'Today' : ($daysUntil === 1 ? 'Tomorrow' : "In $daysUntil days");
+                ?>
+                <div class="audit-row">
+                    <div class="audit-dot" style="background:<?= $daysUntil <= 1 ? '#ef4444' : '#3b82f6' ?>;"></div>
+                    <div class="audit-info">
+                        <div class="audit-action"><?= htmlspecialchars($ev['title']) ?></div>
+                        <div class="audit-desc"><?= htmlspecialchars($ev['location'] ?: 'No location set') ?></div>
+                        <div class="audit-meta"><?= htmlspecialchars($startDt->format('M d, Y')) ?> &middot; <?= htmlspecialchars($dateLabel) ?></div>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+    <?php endif; ?>
+
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="folder-open"></i>
+                Active Projects
+            </h2>
+            <a href="project_action.php" class="btn btn-ghost btn-sm">View All</a>
+        </div>
+        <div class="grid-quick" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#dbeafe;"><i data-lucide="folder" style="width:24px;height:24px;color:#2563eb;"></i></div>
+                <div class="stat-value"><?= (int)$totalProjects ?></div>
+                <div class="stat-label">Total Projects</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fef9c3;"><i data-lucide="calendar" style="width:24px;height:24px;color:#eab308;"></i></div>
+                <div class="stat-value"><?= (int)$totalEvents ?></div>
+                <div class="stat-label">Total Events</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fce7f3;"><i data-lucide="mail" style="width:24px;height:24px;color:#ec4899;"></i></div>
+                <div class="stat-value"><?= (int)$contactUnread ?></div>
+                <div class="stat-label">Unread Messages</div>
+            </div>
+        </div>
+    </div>
+
+    <?php elseif ($_SESSION['admin_role'] === 'Treasurer'): ?>
+    <!-- TREASURER: Donations + Reports -->
+    <div style="margin-bottom:32px;">
+        <div class="section-header">
+            <h2 class="section-title">
+                <i data-lucide="heart-handshake"></i>
+                Donations Overview
+            </h2>
+        </div>
+        <div class="grid-quick" style="grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:16px;">
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#d1fae5;"><i data-lucide="heart-handshake" style="width:24px;height:24px;color:#10b981;"></i></div>
+                <div class="stat-value"><?= (int)$totalDonations ?></div>
+                <div class="stat-label">Total Donations</div>
+            </div>
+            <div class="stat-card fade-up">
+                <div class="stat-icon" style="background:#fce7f3;"><i data-lucide="indian-rupee" style="width:24px;height:24px;color:#ec4899;"></i></div>
+                <div class="stat-value"><?= htmlspecialchars($donationDisplay) ?></div>
+                <div class="stat-label">Total Value</div>
+            </div>
+        </div>
+    </div>
+
+    <?php endif; ?>
+
+    <!-- ═══ FOOTER ═══ -->
     <div style="text-align:center;padding:20px 0 8px;border-top:1px solid #e2e8f0;margin-top:8px;">
         <p style="font-size:12px;color:#94a3b8;margin:0;">
-            &copy; <?= date('Y') ?> Rotary Club of Virar &middot; Service Above Self
+            &copy; <?= htmlspecialchars($_ws['copyright_year']) ?> <?= htmlspecialchars($_ws['website_name']) ?> &middot; Service Above Self
         </p>
     </div>
 </main>
@@ -577,7 +904,6 @@ if ($totalDonationAmount >= 1000000) {
         o.style.display = o.style.display === 'block' ? 'none' : 'block';
     }
 
-    // Responsive toggle visibility
     function handleResize() {
         const mt = document.getElementById('mobileToggle');
         const wb = document.getElementById('websiteBtn');
@@ -592,57 +918,49 @@ if ($totalDonationAmount >= 1000000) {
     window.addEventListener('resize', handleResize);
     handleResize();
 
-    // ─── CHARTS ───
+    <?php if (isSuperAdmin()): ?>
     let engagementChart, donationPieChart;
 
     function initCharts() {
         if (engagementChart) engagementChart.destroy();
         if (donationPieChart) donationPieChart.destroy();
 
-        const eCtx = document.getElementById('engagementChart').getContext('2d');
-        engagementChart = new Chart(eCtx, {
-            type: 'line',
-            data: {
-                labels: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug'],
-                datasets: [
-                    {
-                        label: 'Event Participation',
-                        data: [65, 59, 80, 81, 56, 55, 40, 70],
-                        borderColor: '#4F46E5',
-                        backgroundColor: 'rgba(79,70,229,0.08)',
-                        tension: 0.4,
-                        fill: true,
-                        pointRadius: 3,
-                        pointBackgroundColor: '#4F46E5',
-                    },
-                    {
-                        label: 'New Members',
-                        data: [5, 7, 3, 8, 4, 6, 2, 9],
-                        borderColor: '#10B981',
-                        backgroundColor: 'rgba(16,185,129,0.05)',
-                        tension: 0.4,
-                        fill: false,
-                        pointRadius: 3,
-                        pointBackgroundColor: '#10B981',
-                    }
-                ]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 6, font: { size: 11 } } }
+        const eCtx = document.getElementById('engagementChart');
+        if (eCtx) {
+            engagementChart = new Chart(eCtx.getContext('2d'), {
+                type: 'line',
+                data: {
+                    labels: ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug'],
+                    datasets: [
+                        {
+                            label: 'Event Participation',
+                            data: [65, 59, 80, 81, 56, 55, 40, 70],
+                            borderColor: '#4F46E5',
+                            backgroundColor: 'rgba(79,70,229,0.08)',
+                            tension: 0.4, fill: true,
+                            pointRadius: 3, pointBackgroundColor: '#4F46E5',
+                        },
+                        {
+                            label: 'New Members',
+                            data: [5, 7, 3, 8, 4, 6, 2, 9],
+                            borderColor: '#10B981',
+                            backgroundColor: 'rgba(16,185,129,0.05)',
+                            tension: 0.4, fill: false,
+                            pointRadius: 3, pointBackgroundColor: '#10B981',
+                        }
+                    ]
                 },
-                scales: {
-                    y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' } },
-                    x: { grid: { display: false } }
+                options: {
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'top', labels: { usePointStyle: true, boxWidth: 6, font: { size: 11 } } } },
+                    scales: { y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.04)' } }, x: { grid: { display: false } } }
                 }
-            }
-        });
+            });
+        }
 
         const dCtx = document.getElementById('donationPieChart');
         if (dCtx) {
-            donationPieChart = new Chart(dCtx, {
+            donationPieChart = new Chart(dCtx.getContext('2d'), {
                 type: 'doughnut',
                 data: {
                     labels: ['Money', 'Goods', 'Services'],
@@ -653,11 +971,8 @@ if ($totalDonationAmount >= 1000000) {
                     }]
                 },
                 options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } }
-                    },
+                    responsive: true, maintainAspectRatio: false,
+                    plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8, font: { size: 11 } } } },
                     cutout: '60%',
                 }
             });
@@ -665,28 +980,7 @@ if ($totalDonationAmount >= 1000000) {
     }
 
     document.addEventListener('DOMContentLoaded', initCharts);
-
-    // ─── SIMULATED FEEDBACK ───
-    function simulateAction(action, isSuccess = false) {
-        if (isSuccess) {
-            Swal.fire({ icon: 'success', title: 'Success!', text: action + ' completed!', showConfirmButton: false, timer: 2000, customClass: { popup: 'rounded-xl shadow-2xl' } });
-        } else {
-            Swal.fire({ icon: 'info', title: 'Action Triggered', text: 'Simulating ' + action + ' action.', showCancelButton: true, confirmButtonText: 'Proceed', cancelButtonText: 'Dismiss', customClass: { popup: 'rounded-xl shadow-2xl', confirmButton: 'bg-yellow-500 hover:bg-yellow-600', cancelButton: 'bg-gray-300 hover:bg-gray-400' } });
-        }
-    }
-
-    function simulateLogout() {
-        Swal.fire({
-            title: 'Confirm Logout', text: 'Are you sure you want to exit?', icon: 'warning',
-            showCancelButton: true, confirmButtonColor: '#F87171', cancelButtonColor: '#4F46E5', confirmButtonText: 'Logout',
-            customClass: { popup: 'rounded-xl shadow-2xl' }
-        }).then((r) => {
-            if (r.isConfirmed) {
-                Swal.fire({ title: 'Logged Out!', text: 'Redirecting...', icon: 'info', showConfirmButton: false, timer: 1500, customClass: { popup: 'rounded-xl shadow-2xl' } });
-                setTimeout(() => window.location.href = 'logout.php', 1500);
-            }
-        });
-    }
+    <?php endif; ?>
 </script>
 </body>
 </html>

@@ -2,6 +2,9 @@
 session_start();
 include 'includes/db_connect.php';
 require_once __DIR__ . '/includes/csrf_helper.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
 // ===================== USER / ROLE LOGIC =====================
 $userId   = isset($_SESSION['admin_id']) ? intval($_SESSION['admin_id']) : null;
@@ -144,6 +147,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// ===================== ROTARY YEAR =====================
+$allYears = [];
+$yrRes = $conn->query("SELECT id, year_name, is_current FROM rotary_years ORDER BY year_name DESC");
+if ($yrRes) {
+    while ($y = $yrRes->fetch_assoc()) $allYears[] = $y;
+}
+$selectedYearId = null;
+$selectedYearName = '';
+if (!empty($_GET['ry'])) {
+    foreach ($allYears as $y) {
+        if ($y['id'] == $_GET['ry']) { $selectedYearId = $y['id']; $selectedYearName = $y['year_name']; break; }
+    }
+}
+if (!$selectedYearId) {
+    foreach ($allYears as $y) {
+        if ($y['is_current']) { $selectedYearId = $y['id']; $selectedYearName = $y['year_name']; break; }
+    }
+}
+if (!$selectedYearId && !empty($allYears)) {
+    $selectedYearId = $allYears[0]['id'];
+    $selectedYearName = $allYears[0]['year_name'];
+}
+$yearFilter = $selectedYearId ? " AND e.year_id = $selectedYearId" : '';
+
 // ===================== FETCH DATA =====================
 
 // --- Events ---
@@ -214,7 +241,7 @@ function map_event_row_to_js($row, $conn, $isAdmin = false) {
 }
 
 $allEvents = ['upcoming'=>[], 'ongoing'=>[], 'completed'=>[]];
-$sql = "SELECT * FROM events ORDER BY start_date ASC";
+$sql = "SELECT * FROM events e WHERE 1=1 $yearFilter ORDER BY start_date ASC";
 if ($res = $conn->query($sql)) {
     while ($row = $res->fetch_assoc()) {
         $mapped = map_event_row_to_js($row, $conn, $isAdmin);
@@ -226,7 +253,8 @@ if ($res = $conn->query($sql)) {
 // --- Projects ---
 $projects = [];
 $today = date('Y-m-d');
-$sql = "SELECT project_id, title, description, status, start_date, end_date, collaborator, image_url, created_at FROM projects ORDER BY created_at DESC";
+$projectYearFilter = $selectedYearId ? " AND year_id = $selectedYearId" : '';
+$sql = "SELECT project_id, title, description, status, start_date, end_date, collaborator, image_url, created_at FROM projects WHERE 1=1 $projectYearFilter ORDER BY created_at DESC";
 if ($res = $conn->query($sql)) {
     while ($row = $res->fetch_assoc()) {
         $ps = 'upcoming';
@@ -269,7 +297,7 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rotary Club of Virar - Our Activities</title>
+    <title><?= e($ws['website_name']) ?> - Our Activities</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
@@ -723,8 +751,8 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
     <header class="sticky top-0 z-40 bg-white shadow-md">
         <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-10 h-10 rounded-full object-cover">
-                <span class="text-xl font-extrabold tracking-tight" style="color:var(--rotary-blue);">Rotary Club of Virar</span>
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="w-10 h-10 rounded-full object-cover">
+                <span class="text-xl font-extrabold tracking-tight" style="color:var(--rotary-blue);"><?= e($ws['website_name']) ?></span>
             </div>
             <div class="hidden lg:flex flex-1 justify-center space-x-8">
                 <a href="index.php" class="nav-link">Home</a>
@@ -767,8 +795,8 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
 
             <div class="relative z-10 text-center px-4 max-w-5xl mx-auto py-20 md:py-0">
                 <div class="act-badge">
-                    <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" onerror="this.style.display='none'">
-                    <span>Rotary Club of Virar</span>
+                    <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?>" onerror="this.style.display='none'">
+                    <span><?= e($ws['website_name']) ?></span>
                 </div>
                 <h1 class="act-title">
                     Our Activities &amp; <span class="highlight">Community Impact</span>
@@ -823,6 +851,16 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
                     <div class="section-badge">What We Do</div>
                     <h2 class="section-title">Events &amp; Projects</h2>
                     <div class="section-line"></div>
+                </div>
+
+                <!-- Rotary Year Selector -->
+                <div class="flex flex-col sm:flex-row items-center justify-center mb-8 space-y-4 sm:space-y-0 sm:space-x-4 fade-in-up">
+                    <label class="text-base font-semibold" style="color: var(--rotary-blue);">Select Rotary Year:</label>
+                    <select onchange="window.location.href='?ry='+this.value" class="px-4 py-2 rounded-full border-2 border-[var(--rotary-blue)] text-[var(--rotary-blue)] font-semibold bg-white cursor-pointer outline-none focus:border-[var(--rotary-yellow)] focus:shadow-[0_0_0_3px_rgba(255,192,0,0.2)] transition-all min-w-[180px] text-center">
+                        <?php foreach ($allYears as $y): ?>
+                        <option value="<?= $y['id'] ?>" <?= $y['id'] == $selectedYearId ? 'selected' : '' ?>><?= htmlspecialchars($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
 
                 <!-- Filter Tabs -->
@@ -889,7 +927,6 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
                 <div id="dm-role" class="dm-role"></div>
                 <p id="dm-desc" class="dm-desc"></p>
                 <div id="dm-info" class="dm-info"></div>
-                <div id="dm-report-link" class="mt-3 mb-2"></div>
                 <!-- Event polling area -->
                 <div id="dm-poll-area" style="display:none;">
                     <hr class="my-4 border-gray-100">
@@ -949,7 +986,6 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
                 <div class="sm:col-span-2"><strong>Collaborator:</strong> <span id="pd-collab"></span></div>
             </div>
             <div class="mt-6 flex gap-3">
-                <a id="pd-report-link" href="#" class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg font-semibold text-sm transition-all duration-300 hover:shadow-lg" style="background:var(--rotary-indigo);color:white;"><i class="fas fa-file-alt"></i> View Full Report</a>
                 <button onclick="closeProjectPanel()" class="px-4 py-2 rounded-lg font-semibold text-sm" style="background:var(--rotary-yellow);color:var(--rotary-blue);">Close</button>
             </div>
         </div>
@@ -976,20 +1012,16 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
         const SERVER_USER_ROLE = "<?= $jsUserRoleEscaped ?>";
         const SERVER_USER_NAME = "<?= $jsUserNameEscaped ?>";
 
-        const hasServerEvents = SERVER_EVENTS && (SERVER_EVENTS.upcoming.length || SERVER_EVENTS.ongoing.length || SERVER_EVENTS.completed.length);
-        const hasServerProjects = SERVER_PROJECTS && SERVER_PROJECTS.length;
-
         function buildEventList() {
             const r = { upcoming:[], ongoing:[], completed:[] };
-            if (hasServerEvents) {
-                (SERVER_EVENTS.upcoming||[]).forEach(e => r.upcoming.push(Object.assign({}, e, { _type:'event', _status:'upcoming', imageUrl:e.image_url||'https://placehold.co/600x400/0A2342/FFC000?text=Event', isPolling:typeof e.isPolling!=='undefined'?e.isPolling:true, pollingCount:e.pollingCount||{yes:0,no:0,maybe:0}, pollingDetails:e.pollingDetails||[] })));
-                (SERVER_EVENTS.ongoing||[]).forEach(e => r.ongoing.push(Object.assign({}, e, { _type:'event', _status:'ongoing', imageUrl:e.image_url||'https://placehold.co/600x400/0A2342/FFC000?text=Event', isPolling:false, pollingCount:e.pollingCount||{yes:0,no:0,maybe:0}, pollingDetails:e.pollingDetails||[] })));
-                (SERVER_EVENTS.completed||[]).forEach(e => r.completed.push(Object.assign({}, e, { _type:'event', _status:'completed', imageUrl:e.image_url||'https://placehold.co/600x400/0A2342/FFC000?text=Event', isPolling:false, pollingCount:e.pollingCount||{yes:0,no:0,maybe:0}, pollingDetails:e.pollingDetails||[] })));
-            }
+            if (!SERVER_EVENTS) return r;
+            (SERVER_EVENTS.upcoming||[]).forEach(e => r.upcoming.push(Object.assign({}, e, { _type:'event', _status:'upcoming', imageUrl:e.image_url||'https://placehold.co/600x400/0A2342/FFC000?text=Event', isPolling:typeof e.isPolling!=='undefined'?e.isPolling:true, pollingCount:e.pollingCount||{yes:0,no:0,maybe:0}, pollingDetails:e.pollingDetails||[] })));
+            (SERVER_EVENTS.ongoing||[]).forEach(e => r.ongoing.push(Object.assign({}, e, { _type:'event', _status:'ongoing', imageUrl:e.image_url||'https://placehold.co/600x400/0A2342/FFC000?text=Event', isPolling:false, pollingCount:e.pollingCount||{yes:0,no:0,maybe:0}, pollingDetails:e.pollingDetails||[] })));
+            (SERVER_EVENTS.completed||[]).forEach(e => r.completed.push(Object.assign({}, e, { _type:'event', _status:'completed', imageUrl:e.image_url||'https://placehold.co/600x400/0A2342/FFC000?text=Event', isPolling:false, pollingCount:e.pollingCount||{yes:0,no:0,maybe:0}, pollingDetails:e.pollingDetails||[] })));
             return r;
         }
         function buildProjectList() {
-            if (!hasServerProjects) return [];
+            if (!SERVER_PROJECTS) return [];
             return SERVER_PROJECTS.map(p => Object.assign({}, p, { _type:'project', imageUrl:p.imageUrl||'https://placehold.co/600x400/0A2342/FFC000?text=Project' }));
         }
 
@@ -1047,6 +1079,9 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
                 </div>`;
             }).join('');
             document.querySelectorAll('#activities-grid .fade-in-scale').forEach(el => revealObserver.observe(el));
+            document.querySelectorAll('#activities-grid .fade-in-scale').forEach(el => {
+                if (el.getBoundingClientRect().top < window.innerHeight - 100) el.classList.add('is-visible');
+            });
         }
 
         // ===== FILTER =====
@@ -1107,15 +1142,6 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
                 if (item.startDate) infoDiv.innerHTML += `<div class="dm-info-item"><i class="fas fa-play-circle"></i> Start: ${item.startDate}</div>`;
                 if (item.endDate) infoDiv.innerHTML += `<div class="dm-info-item"><i class="fas fa-flag-checkered"></i> End: ${item.endDate}</div>`;
                 if (item.collaborator) infoDiv.innerHTML += `<div class="dm-info-item"><i class="fas fa-handshake"></i> ${item.collaborator}</div>`;
-            }
-
-            // Report links
-            const reportLinkEl = document.getElementById('dm-report-link');
-            if (type === 'event') {
-                reportLinkEl.innerHTML = `<a href="view_event_report.php?id=${item.id}" class="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-sm font-semibold transition-all duration-300 hover:shadow-lg" style="background:var(--rotary-indigo);color:white;"><i class="fas fa-file-alt"></i> View Full Report</a>`;
-                reportLinkEl.style.display = 'block';
-            } else {
-                reportLinkEl.style.display = 'none';
             }
 
             document.getElementById('dm-poll-area').style.display = type === 'event' ? 'block' : 'none';
@@ -1237,7 +1263,6 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
             document.getElementById('pd-start').textContent = project.startDate||'N/A';
             document.getElementById('pd-end').textContent = project.endDate||'N/A';
             document.getElementById('pd-collab').textContent = project.collaborator||'N/A';
-            document.getElementById('pd-report-link').href = 'view_project_report.php?id=' + project.id;
             projectPanel.classList.add('open');
             projectPanel.setAttribute('aria-hidden','false');
             document.body.style.overflow = 'hidden';
@@ -1330,6 +1355,7 @@ $jsUserNameEscaped = htmlspecialchars($userName, ENT_QUOTES, 'UTF-8');
             if (typeof lucide !== 'undefined') lucide.createIcons();
             document.querySelectorAll('.fade-in-up, .fade-in-scale').forEach(el => revealObserver.observe(el));
             filterActivities('all');
+            document.getElementById('activities-grid').classList.add('is-visible');
             document.querySelectorAll('.filter-btn').forEach(btn => {
                 btn.addEventListener('click', () => filterActivities(btn.getAttribute('data-filter')));
             });

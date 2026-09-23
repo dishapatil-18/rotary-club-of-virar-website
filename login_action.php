@@ -2,6 +2,7 @@
 require_once __DIR__ . '/includes/session_security.php';
 secureSessionStart();
 require_once __DIR__ . '/includes/db_connect.php';
+require_once __DIR__ . '/includes/audit_log.php';
 
 header('Content-Type: application/json; charset=utf-8');
 
@@ -23,6 +24,10 @@ if ($_SESSION['ajax_login_attempts'] >= 10) {
 }
 
 $stmt = $conn->prepare("SELECT admin_id, name, email, password, role, photo_url FROM admins WHERE email = ? AND status = 'active'");
+if (!$stmt) {
+    echo json_encode(['success' => false, 'message' => 'System error. Please contact administrator.']);
+    exit;
+}
 $stmt->bind_param("s", $email);
 $stmt->execute();
 $res = $stmt->get_result();
@@ -43,10 +48,13 @@ if ($res->num_rows === 1) {
         $_SESSION['is_logged_in'] = true;
         $_SESSION['last_activity'] = time();
 
+        logAudit($conn, 'Authentication', 'Login Success', 'Admin "' . $admin['name'] . '" logged in via AJAX.', 'INFO', 'success', $admin['admin_id'], $admin['name'], $admin['role']);
+
         echo json_encode(['success' => true]);
         exit;
     }
 }
 
 $_SESSION['ajax_login_attempts']++;
+logAudit($conn, 'Authentication', 'Login Failure', 'Failed AJAX login attempt for "' . $email . '".', 'WARNING', 'failed');
 echo json_encode(['success' => false, 'message' => 'Invalid email or password']);

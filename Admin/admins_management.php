@@ -3,6 +3,9 @@ session_start();
 if (!isset($_SESSION['admin_id'])) { header("Location: ../login.php"); exit; }
 require_once __DIR__ . '/../includes/db_connect.php';
 require_once __DIR__ . '/admin_functions.php';
+require_once __DIR__ . '/../includes/website_settings.php';
+require_once __DIR__ . '/../includes/audit_log.php';
+$_ws = getWebsiteSettings($conn);
 if (!isSuperAdmin()) { echo "<script>alert('Access denied. Super Admin only.'); window.location.href='dashboard.php';</script>"; exit; }
 
 $message = '';
@@ -41,6 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt3->bind_param("sssss", $name, $email, $password, $role, $phone);
                 if ($stmt3->execute()) {
                     $message = 'Admin account created successfully.';
+                    logAudit($conn, 'Administration', 'Admin Added', 'Created admin "' . $name . '" (' . $email . ') with role "' . $role . '".', 'CRITICAL', 'success');
                 } else {
                     $error = 'Failed to create admin: ' . $stmt3->error;
                 }
@@ -54,6 +58,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->bind_param("si", $newPassword, $adminId);
             if ($stmt->execute()) {
                 $message = 'Password reset successfully.';
+                logAudit($conn, 'Administration', 'Admin Password Reset', 'Super Admin reset password for admin ID ' . $adminId . '.', 'CRITICAL', 'success');
             } else {
                 $error = 'Failed to reset password.';
             }
@@ -83,6 +88,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt2->execute();
                 $stmt2->close();
                 $message = 'Admin status updated.';
+                $accessAction = $newStatus === 'active' ? 'Admin Access Granted' : 'Admin Access Revoked';
+                logAudit($conn, 'Administration', $accessAction, 'Admin ID ' . $adminId . ' status changed to "' . $newStatus . '".', 'WARNING', 'success');
             }
             }
         } elseif ($_POST['action'] === 'update_role' && isset($_POST['admin_id'])) {
@@ -103,6 +110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute();
             $stmt->close();
             $message = 'Admin role updated.';
+            logAudit($conn, 'Administration', 'Admin Role Updated', 'Admin ID ' . $adminId . ' role changed to "' . $newRole . '".', 'WARNING', 'success');
             }
         }
     }
@@ -117,7 +125,7 @@ if ($r) { while ($row = $r->fetch_assoc()) $admins[] = $row; }
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Admin Management - Rotary Club Virar</title>
+    <title>Admin Management - <?= e($_ws['website_short_name']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">

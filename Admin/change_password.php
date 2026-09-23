@@ -5,8 +5,9 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 require __DIR__ . '/../includes/db_connect.php';
-require __DIR__ . '/../includes/send_email.php';
+require_once __DIR__ . '/../includes/communication_engine.php';
 require_once __DIR__ . '/../includes/csrf_helper.php';
+require_once __DIR__ . '/../config/club_settings.php';
 
 $message = '';
 $msgType = '';
@@ -48,6 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if ($upd->execute()) {
                 $message = 'Password changed successfully!';
                 $msgType = 'success';
+                logAudit($conn, 'Authentication', 'Password Changed', 'Admin changed their own password.', 'CRITICAL', 'success');
 
                 // Send password change notification email
                 $stmt2 = $conn->prepare("SELECT name, email FROM admins WHERE admin_id = ?");
@@ -57,15 +59,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt2->close();
 
                 if ($adminInfo && !empty($adminInfo['email'])) {
-                    $subject = "Your Rotary Club Admin Password Was Changed";
+                    $subject = "Your " . CLUB_NAME . " Admin Password Was Changed";
                     $body = "
                     <p>Hi " . htmlspecialchars($adminInfo['name']) . ",</p>
-                    <p>Your admin account password for Rotary Club of Virar was just changed.</p>
+                    <p>Your admin account password for " . CLUB_NAME . " was just changed.</p>
                     <p>If you made this change, no further action is needed.</p>
                     <p>If you did <strong>not</strong> make this change, please contact the club administrator immediately.</p>
-                    <p style='color:#999;font-size:12px;'>This is an automated security notification from the Rotary Club of Virar website.</p>
+                    <p style='color:#999;font-size:12px;'>This is an automated security notification from the " . CLUB_NAME . " website.</p>
                     ";
-                    sendEmail($adminInfo['email'], $subject, $body);
+                    commSendEmail($conn, $adminInfo['email'], $subject, $body, 'Authentication', 'Password Change Notification', 'Password change notification sent to ' . $adminInfo['email']);
                 }
             } else {
                 $message = 'Failed to update password. Try again.';

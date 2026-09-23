@@ -3,271 +3,317 @@ session_start();
 if (!isset($_SESSION['admin_id'])) { header("Location: ../login.php"); exit; }
 require_once __DIR__ . '/../includes/db_connect.php';
 require_once __DIR__ . '/admin_functions.php';
+require_once __DIR__ . '/../includes/website_settings.php';
+require_once __DIR__ . '/../includes/audit_log.php';
+require_once __DIR__ . '/../includes/csrf_helper.php';
+$_ws = getWebsiteSettings($conn);
 if (!isSuperAdmin()) { echo "<script>alert('Access denied. Super Admin only.'); window.location.href='dashboard.php';</script>"; exit; }
 
 $message = '';
 $error = '';
 
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!validateCsrfToken()) {
+        $error = 'Invalid security token.';
+    } elseif ($_POST['action'] === 'assign_role') {
+        $yearId = (int)$_POST['rotary_year'];
+        $role = trim($_POST['role'] ?? '');
+        $memberId = (int)($_POST['member_id'] ?? 0);
+        $validRoles = ['President', 'Secretary', 'Treasurer'];
+
+        if (!in_array($role, $validRoles)) {
+            $error = 'Invalid role selected.';
+        } elseif ($yearId <= 0) {
+            $error = 'Invalid year selected.';
+        } elseif ($memberId <= 0) {
+            $error = 'Please select a member.';
+        } else {
+            $check = $conn->prepare("SELECT role FROM leadership_assignments WHERE rotary_year_id = ? AND member_id = ?");
+            $check->bind_param("ii", $yearId, $memberId);
+            $check->execute();
+            $existing = $check->get_result()->fetch_assoc();
+            $check->close();
+
+            if ($existing && $existing['role'] === $role) {
+                $message = 'This member is already assigned as ' . $role . ' for this year. No changes needed.';
+            } elseif ($existing) {
+                $error = 'This member is already assigned as ' . $existing['role'] . ' for this year.';
+            } else {
+                $check2 = $conn->prepare("SELECT member_id FROM leadership_assignments WHERE rotary_year_id = ? AND role = ?");
+                $check2->bind_param("is", $yearId, $role);
+                $check2->execute();
+                $existingRole = $check2->get_result()->fetch_assoc();
+                $check2->close();
+
+                if ($existingRole) {
+                    $error = 'The ' . $role . ' role is already assigned for this year. Use Edit to change the member.';
+                } else {
+                    $stmt = $conn->prepare("INSERT INTO leadership_assignments (rotary_year_id, member_id, role) VALUES (?, ?, ?)");
+                    $stmt->bind_param("iis", $yearId, $memberId, $role);
+                    if ($stmt->execute() && $stmt->affected_rows > 0) {
+                        $message = $role . ' assigned successfully.';
+                        logAudit($conn, 'Administration', 'Leadership Assigned', $role . ' assigned to member ID ' . $memberId . ' for year ID ' . $yearId . '.', 'INFO', 'success');
+                    } else {
+                        $error = 'Failed to assign role.';
+                    }
+                    $stmt->close();
+                }
+            }
+        }
+    } elseif ($_POST['action'] === 'edit_assignment' && isset($_POST['assignment_id'])) {
+        $assignmentId = (int)$_POST['assignment_id'];
+        $newMemberId = (int)($_POST['member_id'] ?? 0);
+
+        if ($assignmentId <= 0) {
+            $error = 'Invalid assignment.';
+        } elseif ($newMemberId <= 0) {
+            $error = 'Please select a member.';
+        } else {
+            $check = $conn->prepare("SELECT rotary_year_id, role, member_id FROM leadership_assignments WHERE id = ?");
+            $check->bind_param("i", $assignmentId);
+            $check->execute();
+            $assignment = $check->get_result()->fetch_assoc();
+            $check->close();
+
+            if (!$assignment) {
+                $error = 'Assignment not found.';
+            } elseif ($assignment['member_id'] == $newMemberId) {
+                $message = 'No changes made.';
+            } else {
+                $check2 = $conn->prepare("SELECT role FROM leadership_assignments WHERE rotary_year_id = ? AND member_id = ? AND id != ?");
+                $check2->bind_param("iii", $assignment['rotary_year_id'], $newMemberId, $assignmentId);
+                $check2->execute();
+                $existingMember = $check2->get_result()->fetch_assoc();
+                $check2->close();
+
+                if ($existingMember) {
+                    $error = 'This member is already assigned as ' . $existingMember['role'] . ' for this year.';
+                } else {
+                    $stmt = $conn->prepare("UPDATE leadership_assignments SET member_id = ? WHERE id = ?");
+                    $stmt->bind_param("ii", $newMemberId, $assignmentId);
+                    if ($stmt->execute()) {
+                        $message = $assignment['role'] . ' assignment updated successfully.';
+                        logAudit($conn, 'Administration', 'Leadership Updated', $assignment['role'] . ' reassigned from member ID ' . $assignment['member_id'] . ' to member ID ' . $newMemberId . ' for year ID ' . $assignment['rotary_year_id'] . '.', 'INFO', 'success');
+                    } else {
+                        $error = 'Failed to update assignment.';
+                    }
+                    $stmt->close();
+                }
+            }
+        }
+    } elseif ($_POST['action'] === 'end_assignment' && isset($_POST['assignment_id'])) {
+        $assignmentId = (int)$_POST['assignment_id'];
+
+        if ($assignmentId <= 0) {
+            $error = 'Invalid assignment.';
+        } else {
+            $check = $conn->prepare("SELECT rotary_year_id, role, member_id FROM leadership_assignments WHERE id = ?");
+            $check->bind_param("i", $assignmentId);
+            $check->execute();
+            $assignment = $check->get_result()->fetch_assoc();
+            $check->close();
+
+            if (!$assignment) {
+                $error = 'Assignment not found.';
+            } else {
+                $memberName = '';
+                $mStmt = $conn->prepare("SELECT name FROM members WHERE member_id = ?");
+                $mStmt->bind_param("i", $assignment['member_id']);
+                $mStmt->execute();
+                $mRow = $mStmt->get_result()->fetch_assoc();
+                if ($mRow) $memberName = $mRow['name'];
+                $mStmt->close();
+
+                $stmt = $conn->prepare("DELETE FROM leadership_assignments WHERE id = ?");
+                $stmt->bind_param("i", $assignmentId);
+                if ($stmt->execute()) {
+                    $message = $assignment['role'] . ' assignment ended.';
+                    logAudit($conn, 'Administration', 'Leadership Removed', $assignment['role'] . ' (member: ' . $memberName . ', ID ' . $assignment['member_id'] . ') removed from year ID ' . $assignment['rotary_year_id'] . '.', 'WARNING', 'success');
+                } else {
+                    $error = 'Failed to end assignment.';
+                }
+                $stmt->close();
+            }
+        }
+    }
+}
+
 $years = getAllRotaryYears($conn);
 $currentYear = getCurrentRotaryYear($conn);
 
-// Get all active members for assignment dropdowns
+$selectedYearId = isset($_GET['year']) ? (int)$_GET['year'] : 0;
+if ($selectedYearId <= 0 && $currentYear) { $selectedYearId = $currentYear['id']; }
+if ($selectedYearId <= 0 && !empty($years)) { $selectedYearId = $years[0]['id']; }
+
+$selectedYearName = '';
+foreach ($years as $y) {
+    if ($y['id'] == $selectedYearId) { $selectedYearName = $y['year_name']; break; }
+}
+
 $members = [];
 $r = $conn->query("SELECT member_id, name, role FROM members WHERE status = 'Active' ORDER BY name ASC");
 if ($r) { while ($row = $r->fetch_assoc()) $members[] = $row; }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_leadership') {
-    $selectedYearId = (int)$_POST['rotary_year'];
-    $presidentId = (int)$_POST['president'];
-    $secretaryId = (int)$_POST['secretary'];
-    $treasurerId = (int)$_POST['treasurer'];
-
-    $conn->begin_transaction();
-    try {
-        $assignments = [
-            'President' => $presidentId,
-            'Secretary' => $secretaryId,
-            'Treasurer' => $treasurerId,
-        ];
-        foreach ($assignments as $role => $memberId) {
-            $stmt = $conn->prepare("INSERT INTO leadership_assignments (rotary_year_id, member_id, role) VALUES (?, ?, ?) ON DUPLICATE KEY UPDATE member_id = VALUES(member_id)");
-            $stmt->bind_param("iis", $selectedYearId, $memberId, $role);
-            $stmt->execute();
-            $stmt->close();
-
-            // Update member role in members table
-            $stmt2 = $conn->prepare("UPDATE members SET role = ? WHERE member_id = ?");
-            $stmt2->bind_param("si", $role, $memberId);
-            $stmt2->execute();
-            $stmt2->close();
-        }
-
-        $conn->commit();
-        $message = 'Leadership saved successfully for the selected year.';
-    } catch (Exception $e) {
-        $conn->rollback();
-        $error = 'Failed to save leadership: ' . $e->getMessage();
-    }
+$assignments = [];
+if ($selectedYearId > 0) {
+    $assignments = getLeadershipForYear($conn, $selectedYearId);
 }
 
-// Get current leadership assignments for the current year
-$currentLeaders = [];
-if ($currentYear) {
-    $currentLeaders = getLeadershipForYear($conn, $currentYear['id']);
-}
-$currentLeadershipMap = [];
-foreach ($currentLeaders as $l) {
-    $currentLeadershipMap[$l['role']] = $l;
-}
+$assignedRoles = [];
+foreach ($assignments as $a) { $assignedRoles[$a['role']] = $a; }
+
+$pageTitle = 'Leadership Management';
+$activeNav = 'leadership';
+require __DIR__ . '/includes/admin_head.php';
+require __DIR__ . '/includes/admin_header.php';
 ?>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Leadership Management - Rotary Club Virar</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
-    <style>
-        :root { --rotary-blue: #0A2342; --rotary-yellow: #FFC000; --rotary-gold: #e6a800; }
-        * { box-sizing: border-box; }
-        body { font-family: 'Inter', sans-serif; background: #f0f2f5; color: #1e293b; margin: 0; }
-        .page-wrap { max-width: 900px; margin: 0 auto; padding: 32px 24px; }
-        .card { background: white; border-radius: 14px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); border: 1px solid #f1f5f9; overflow: hidden; }
-        .card-header { padding: 20px 24px; border-bottom: 1px solid #f1f5f9; display: flex; align-items: center; justify-content: space-between; }
-        .card-body { padding: 20px 24px; }
-        .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 9px; font-weight: 600; font-size: 13px; transition: all 0.15s; cursor: pointer; border: none; text-decoration: none; font-family: inherit; }
-        .btn-primary { background: var(--rotary-blue); color: #fff; }
-        .btn-primary:hover { background: #1a365d; }
-        .btn-yellow { background: var(--rotary-yellow); color: var(--rotary-blue); }
-        .btn-yellow:hover { background: var(--rotary-gold); }
-        .btn-ghost { background: transparent; color: #64748b; }
-        .btn-ghost:hover { background: #f1f5f9; }
-        .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 7px; }
-        .btn-lg { padding: 12px 24px; font-size: 15px; }
-        .btn-block { width: 100%; justify-content: center; }
-        select, input { width: 100%; padding: 10px 14px; border: 2px solid #e2e8f0; border-radius: 10px; font-size: 14px; font-family: inherit; outline: none; transition: all 0.2s; background: white; }
-        select:focus, input:focus { border-color: var(--rotary-yellow); box-shadow: 0 0 0 4px rgba(255,192,0,0.1); }
-        label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 4px; }
-        .role-tag { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
-        .role-president { background: #dbeafe; color: #1e40af; }
-        .role-secretary { background: #d1fae5; color: #166534; }
-        .role-treasurer { background: #fef9c3; color: #854d0e; }
-        .step-number { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 50%; background: var(--rotary-yellow); color: var(--rotary-blue); font-weight: 800; font-size: 13px; flex-shrink: 0; }
-        .leader-card { text-align: center; padding: 20px; background: #f8fafc; border-radius: 12px; border: 2px solid #f1f5f9; }
-        .leader-card .name { font-weight: 700; color: #0f172a; font-size: 15px; margin-top: 8px; }
-        .leader-card .email { font-size: 12px; color: #64748b; }
-        @media (max-width: 768px) { .page-wrap { padding: 16px; } }
-    </style>
-</head>
-<body>
-<div class="page-wrap">
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;">
-        <a href="dashboard.php" class="btn btn-ghost btn-sm"><i data-lucide="arrow-left" style="width:16px;height:16px;"></i> Back</a>
-        <h1 style="font-size:24px;font-weight:800;color:#0f172a;margin:0;">Leadership Management</h1>
+
+<?php if ($message): ?>
+<div class="alert alert-success"><?= e($message) ?></div>
+<?php endif; ?>
+<?php if ($error): ?>
+<div class="alert alert-error"><?= e($error) ?></div>
+<?php endif; ?>
+
+<?php if ($currentYear): ?>
+<div class="alert alert-info" style="background:#fef9c3;border:1px solid #fde68a;color:#854d0e;">
+    <i data-lucide="calendar-check" style="width:18px;height:18px;"></i>
+    Current Rotary Year: <strong><?= e($currentYear['year_name']) ?></strong>
+</div>
+<?php endif; ?>
+
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header">
+        <h2 style="font-size:16px;font-weight:700;margin:0;">Select Rotary Year</h2>
     </div>
-
-    <?php if ($currentYear): ?>
-    <div style="background:#fef9c3;border:1px solid #fde68a;padding:12px 20px;border-radius:10px;margin-bottom:20px;display:flex;align-items:center;gap:10px;">
-        <i data-lucide="calendar-check" style="width:20px;height:20px;color:#854d0e;flex-shrink:0;"></i>
-        <span style="font-size:14px;font-weight:600;color:#854d0e;">Current Rotary Year: <strong><?= e($currentYear['year_name']) ?></strong></span>
-    </div>
-    <?php endif; ?>
-
-    <?php if ($message): ?><div style="background:#dcfce7;border:1px solid #bbf7d0;color:#166534;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;font-weight:500;"><?= e($message) ?></div><?php endif; ?>
-    <?php if ($error): ?><div style="background:#fee2e2;border:1px solid #fecaca;color:#991b1b;padding:12px 16px;border-radius:10px;margin-bottom:16px;font-size:14px;font-weight:500;"><?= e($error) ?></div><?php endif; ?>
-
-    <!-- Current Leadership Display -->
-    <?php if ($currentYear && !empty($currentLeadershipMap)): ?>
-    <div class="card" style="margin-bottom:24px;">
-        <div class="card-header">
-            <h2 style="font-size:16px;font-weight:700;margin:0;">Current Leadership Team — <?= e($currentYear['year_name']) ?></h2>
-        </div>
-        <div class="card-body">
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:16px;">
-                <?php foreach (['President', 'Secretary', 'Treasurer'] as $role): 
-                    $leader = $currentLeadershipMap[$role] ?? null;
-                    $badgeClass = match($role) { 'President' => 'role-president', 'Secretary' => 'role-secretary', 'Treasurer' => 'role-treasurer', default => '' };
-                ?>
-                <div class="leader-card">
-                    <span class="role-tag <?= $badgeClass ?>"><?= $role ?></span>
-                    <div class="name"><?= e($leader['name'] ?? 'Not assigned') ?></div>
-                    <?php if ($leader && $leader['email']): ?>
-                    <div class="email"><?= e($leader['email']) ?></div>
-                    <?php endif; ?>
-                </div>
-                <?php endforeach; ?>
-            </div>
-        </div>
-    </div>
-    <?php endif; ?>
-
-    <!-- Assign New Leadership -->
-    <div class="card" style="margin-bottom:24px;">
-        <div class="card-header">
-            <div style="display:flex;align-items:center;gap:10px;">
-                <span class="step-number">1</span>
-                <h2 style="font-size:16px;font-weight:700;margin:0;">Select Rotary Year</h2>
-            </div>
-        </div>
-        <div class="card-body">
-            <p style="font-size:13px;color:#64748b;margin:0 0 12px;">Choose the Rotary Year you want to assign leadership for.</p>
-            <form method="POST" id="leadership-form">
-                <input type="hidden" name="action" value="save_leadership">
-                <select name="rotary_year" required style="max-width:300px;">
-                    <option value="">-- Select a year --</option>
+    <div class="card-body">
+        <form method="GET" style="display:flex;gap:12px;align-items:end;">
+            <div style="flex:1;">
+                <label class="form-label">Rotary Year</label>
+                <select name="year" class="form-select" onchange="this.form.submit()" style="max-width:300px;">
                     <?php foreach ($years as $y): ?>
-                    <option value="<?= $y['id'] ?>" <?= $y['is_current'] ? 'selected' : '' ?>><?= e($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
+                    <option value="<?= $y['id'] ?>" <?= $y['id'] == $selectedYearId ? 'selected' : '' ?>><?= e($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
                     <?php endforeach; ?>
                 </select>
-        </div>
-    </div>
-
-    <div class="card" style="margin-bottom:24px;">
-        <div class="card-header">
-            <div style="display:flex;align-items:center;gap:10px;">
-                <span class="step-number">2</span>
-                <h2 style="font-size:16px;font-weight:700;margin:0;">Assign Club Officers</h2>
             </div>
-        </div>
-        <div class="card-body">
-            <p style="font-size:13px;color:#64748b;margin:0 0 16px;">Select the members who will serve as President, Secretary, and Treasurer for this year.</p>
-
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px;margin-bottom:24px;">
-                    <div>
-                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                            <span class="role-tag role-president">President</span>
-                        </label>
-                        <select name="president" required>
-                            <option value="">-- Choose President --</option>
-                            <?php foreach ($members as $m): ?>
-                            <option value="<?= $m['member_id'] ?>" <?= ($m['role'] ?? '') === 'President' ? 'selected' : '' ?>><?= e($m['name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                            <span class="role-tag role-secretary">Secretary</span>
-                        </label>
-                        <select name="secretary" required>
-                            <option value="">-- Choose Secretary --</option>
-                            <?php foreach ($members as $m): ?>
-                            <option value="<?= $m['member_id'] ?>" <?= ($m['role'] ?? '') === 'Secretary' ? 'selected' : '' ?>><?= e($m['name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                    <div>
-                        <label style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
-                            <span class="role-tag role-treasurer">Treasurer</span>
-                        </label>
-                        <select name="treasurer" required>
-                            <option value="">-- Choose Treasurer --</option>
-                            <?php foreach ($members as $m): ?>
-                            <option value="<?= $m['member_id'] ?>" <?= ($m['role'] ?? '') === 'Treasurer' ? 'selected' : '' ?>><?= e($m['name']) ?></option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                </div>
-
-                <div style="background:#f0f9ff;border:1px solid #bae6fd;padding:14px 18px;border-radius:10px;margin-bottom:20px;display:flex;align-items:flex-start;gap:10px;">
-                    <i data-lucide="info" style="width:18px;height:18px;color:#0369a1;flex-shrink:0;margin-top:2px;"></i>
-                    <div style="font-size:13px;color:#0369a1;line-height:1.5;">
-                        <strong>Note:</strong> Previous leadership records for this year will be updated. All past assignments are preserved in history.
-                    </div>
-                </div>
-
-                <div style="display:flex;gap:12px;justify-content:flex-end;">
-                    <span class="step-number" style="display:inline-flex;">3</span>
-                    <button type="submit" class="btn btn-yellow btn-lg" onclick="return confirm('Save this leadership team for the selected year?')">
-                        <i data-lucide="save" style="width:18px;height:18px;"></i> Save Leadership
-                    </button>
-                </div>
-            </form>
-        </div>
+        </form>
     </div>
+</div>
 
-    <!-- Previous Leadership History -->
-    <?php
-    $historyYears = $conn->query("SELECT id, year_name FROM rotary_years WHERE is_current = 0 ORDER BY year_name DESC LIMIT 5");
-    if ($historyYears && $historyYears->num_rows > 0):
-    ?>
-    <div class="card">
-        <div class="card-header">
-            <h2 style="font-size:16px;font-weight:700;margin:0;">Previous Leadership Teams</h2>
-        </div>
-        <div class="card-body" style="padding:0;">
-            <table style="width:100%;border-collapse:collapse;font-size:14px;">
-                <thead>
-                    <tr style="background:#f8fafc;text-align:left;">
-                        <th style="padding:12px 16px;font-weight:600;color:#64748b;font-size:12px;text-transform:uppercase;">Year</th>
-                        <th style="padding:12px 16px;font-weight:600;color:#64748b;font-size:12px;text-transform:uppercase;">President</th>
-                        <th style="padding:12px 16px;font-weight:600;color:#64748b;font-size:12px;text-transform:uppercase;">Secretary</th>
-                        <th style="padding:12px 16px;font-weight:600;color:#64748b;font-size:12px;text-transform:uppercase;">Treasurer</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php while ($hy = $historyYears->fetch_assoc()): 
-                        $leaders = getLeadershipForYear($conn, $hy['id']);
-                        $lmap = [];
-                        foreach ($leaders as $l) $lmap[$l['role']] = $l['name'];
-                    ?>
-                    <tr style="border-top:1px solid #f1f5f9;">
-                        <td style="padding:12px 16px;font-weight:600;color:#0f172a;"><?= e($hy['year_name']) ?></td>
-                        <td style="padding:12px 16px;"><?= e($lmap['President'] ?? '-') ?></td>
-                        <td style="padding:12px 16px;"><?= e($lmap['Secretary'] ?? '-') ?></td>
-                        <td style="padding:12px 16px;"><?= e($lmap['Treasurer'] ?? '-') ?></td>
-                    </tr>
-                    <?php endwhile; ?>
-                </tbody>
-            </table>
-        </div>
+<div class="card" style="margin-bottom:24px;">
+    <div class="card-header">
+        <h2 style="font-size:16px;font-weight:700;margin:0;">Assign New Role</h2>
     </div>
-    <?php endif; ?>
+    <div class="card-body">
+        <div style="font-size:13px;color:#64748b;margin-bottom:12px;">Assigning to: <strong><?= e($selectedYearName) ?></strong></div>
+        <form method="POST" style="display:flex;gap:12px;align-items:end;flex-wrap:wrap;">
+            <?= csrfField() ?>
+            <input type="hidden" name="action" value="assign_role">
+            <input type="hidden" name="rotary_year" value="<?= $selectedYearId ?>">
+            <div style="flex:1;min-width:180px;">
+                <label class="form-label">Role</label>
+                <select name="role" class="form-select" required>
+                    <option value="">-- Select Role --</option>
+                    <?php foreach (['President', 'Secretary', 'Treasurer'] as $role): ?>
+                    <option value="<?= $role ?>" <?= isset($assignedRoles[$role]) ? 'disabled' : '' ?>><?= $role ?><?= isset($assignedRoles[$role]) ? ' (Assigned)' : '' ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div style="flex:2;min-width:220px;">
+                <label class="form-label">Member</label>
+                <select name="member_id" class="form-select" required>
+                    <option value="">-- Select Member --</option>
+                    <?php foreach ($members as $m): ?>
+                    <option value="<?= $m['member_id'] ?>"><?= e($m['name']) ?><?= $m['role'] ? ' (' . e($m['role']) . ')' : '' ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <button type="submit" class="btn btn-primary"><i data-lucide="user-plus" style="width:16px;height:16px;"></i> Assign</button>
+        </form>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h2 style="font-size:16px;font-weight:700;margin:0;">Leadership — <?= e($selectedYearName) ?></h2>
+        <span style="font-size:13px;color:#94a3b8;"><?= count($assignments) ?> assigned</span>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto;">
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Role</th>
+                    <th>Member</th>
+                    <th>Email</th>
+                    <th style="text-align:right;">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php foreach (['President', 'Secretary', 'Treasurer'] as $role):
+                    $a = $assignedRoles[$role] ?? null;
+                    $badgeClass = match($role) { 'President' => 'badge-blue', 'Secretary' => 'badge-green', 'Treasurer' => 'badge-yellow', default => 'badge-gray' };
+                ?>
+                <tr>
+                    <td><span class="badge <?= $badgeClass ?>"><?= e($role) ?></span></td>
+                    <?php if ($a): ?>
+                    <td style="font-weight:600;color:#0f172a;"><?= e($a['name']) ?></td>
+                    <td style="color:#64748b;"><?= e($a['email']) ?></td>
+                    <td style="text-align:right;">
+                        <div style="display:flex;gap:6px;justify-content:flex-end;">
+                            <button onclick="openEditModal(<?= $a['assignment_id'] ?>, '<?= e($role) ?>', <?= $a['member_id'] ?>)" class="btn btn-edit btn-sm"><i data-lucide="pencil" style="width:14px;height:14px;"></i> Edit</button>
+                            <form method="POST" style="display:inline;" onsubmit="return confirm('Remove this <?= e($role) ?> assignment? This action cannot be undone.')">
+                                <?= csrfField() ?>
+                                <input type="hidden" name="action" value="end_assignment">
+                                <input type="hidden" name="assignment_id" value="<?= $a['assignment_id'] ?>">
+                                <button type="submit" class="btn btn-delete btn-sm"><i data-lucide="trash-2" style="width:14px;height:14px;"></i> End</button>
+                            </form>
+                        </div>
+                    </td>
+                    <?php else: ?>
+                    <td colspan="2" style="color:#94a3b8;font-style:italic;">Not assigned</td>
+                    <?php endif; ?>
+                </tr>
+                <?php endforeach; ?>
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100;align-items:center;justify-content:center;padding:16px;" onclick="closeEditModal(event)">
+    <div style="background:white;border-radius:14px;padding:24px;max-width:400px;width:100%;box-shadow:0 25px 50px rgba(0,0,0,0.2);" onclick="event.stopPropagation()">
+        <h3 style="font-size:18px;font-weight:700;margin:0 0 4px;">Edit Assignment</h3>
+        <p style="font-size:14px;color:#64748b;margin:0 0 16px;" id="edit-role-label"></p>
+        <form method="POST">
+            <?= csrfField() ?>
+            <input type="hidden" name="action" value="edit_assignment">
+            <input type="hidden" name="assignment_id" id="edit-assignment-id">
+            <div style="margin-bottom:16px;">
+                <label class="form-label">Member</label>
+                <select name="member_id" id="edit-member-id" class="form-select" required>
+                    <option value="">-- Select Member --</option>
+                    <?php foreach ($members as $m): ?>
+                    <option value="<?= $m['member_id'] ?>"><?= e($m['name']) ?><?= $m['role'] ? ' (' . e($m['role']) . ')' : '' ?></option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;">
+                <button type="button" onclick="closeEditModal(event)" class="btn btn-ghost">Cancel</button>
+                <button type="submit" class="btn btn-primary">Save Changes</button>
+            </div>
+        </form>
+    </div>
 </div>
 
 <script>
-lucide.createIcons();
+function openEditModal(id, roleName, memberId) {
+    document.getElementById('edit-assignment-id').value = id;
+    document.getElementById('edit-role-label').textContent = 'Update ' + roleName + ' assignment for <?= e($selectedYearName) ?>';
+    document.getElementById('edit-member-id').value = memberId;
+    document.getElementById('edit-modal').style.display = 'flex';
+}
+function closeEditModal(e) {
+    document.getElementById('edit-modal').style.display = 'none';
+}
 </script>
-</body>
-</html>
+
+<?php require __DIR__ . '/includes/admin_footer.php'; ?>

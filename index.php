@@ -1,29 +1,37 @@
 <?php
 // index.php - Home Page
 
-// ================= DB CONNECTION =================
+// ================= SESSION & DB CONNECTION =================
+require_once __DIR__ . '/includes/session_security.php';
+secureSessionStart();
 require_once __DIR__ . '/includes/db_connect.php';
 require_once __DIR__ . '/config/club_settings.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
-// ---------- Helper: Safe output ----------
-function e($s) {
-    return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8');
+function homeImg($path) {
+    if (!$path) return '';
+    if (str_starts_with($path, '../')) return substr($path, 3);
+    return $path;
 }
 
-// ---------- Fetch Site Content for Hero ----------
+// ---------- Fetch Site Content ----------
 function getSiteContent($conn, $page) {
-    $r = $conn->query("SELECT section, content FROM site_content WHERE page = '$page'");
+    $stmt = $conn->prepare("SELECT section, content FROM site_content WHERE page = ?");
+    $stmt->bind_param("s", $page);
+    $stmt->execute();
+    $r = $stmt->get_result();
     $content = [];
     if ($r) {
         while ($row = $r->fetch_assoc()) $content[$row['section']] = $row['content'];
     }
+    $stmt->close();
     return $content;
 }
 $homeContent = getSiteContent($conn, 'home');
-$heroHeading = $homeContent['hero_heading'] ?? 'Serving with Gratitude,<br>Leading with <span class="highlight">Legacy</span>';
-$heroDescription = $homeContent['hero_description'] ?? 'Together, we make the world a better place. Creating impact, inspiring change, strengthening communities.';
 $aboutContent = getSiteContent($conn, 'about');
-$aboutDescription = $aboutContent['about_description'] ?? '';
+$aboutDescription = $homeContent['about_description'] ?? $aboutContent['about_description'] ?? '';
 
 // ---------- Fetch Projects: latest Upcoming, Completed, Ongoing (one each) ----------
 $project_cards = [
@@ -96,7 +104,7 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rotary Club of Virar - Service Above Self</title>
+    <title><?= e($ws['browser_title']) ?></title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
@@ -524,9 +532,9 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
         <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex justify-between items-center">
             <div class="flex items-center space-x-2.5">
                 <div class="w-12 h-12 flex items-center justify-center flex-shrink-0">
-                    <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-full h-full object-contain rounded-full shadow-lg border-2 border-blue-900">
+                    <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="w-full h-full object-contain rounded-full shadow-lg border-2 border-blue-900">
                 </div>
-                <span class="text-lg font-extrabold tracking-tight whitespace-nowrap" style="color: var(--rotary-blue);">Rotary Club of Virar</span>
+                <span class="text-lg font-extrabold tracking-tight whitespace-nowrap" style="color: var(--rotary-blue);"><?= e($ws['website_name']) ?></span>
             </div>
             <div class="hidden lg:flex flex-1 justify-center space-x-5">
                 <a href="#home" class="nav-link">Home</a>
@@ -558,8 +566,20 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
 
     <main>
         <!-- ===== HERO SECTION ===== -->
+        <?php
+        $heroBg = homeImg($homeContent['hero_image'] ?? 'assets/uploads/Logo/HeroSection3A.jpeg');
+        $heroHeading = $homeContent['hero_heading'] ?? 'Serving with Gratitude,<br>Leading with <span class="highlight">Legacy</span>';
+        $heroDescription = $homeContent['hero_description'] ?? 'Together, we make the world a better place. Creating impact, inspiring change, strengthening communities.';
+        $heroPrimaryText = $homeContent['hero_primary_btn_text'] ?? 'View Our Activities';
+        $heroPrimaryLink = $homeContent['hero_primary_btn_link'] ?? 'activities.php';
+        $heroSecondaryText = $homeContent['hero_secondary_btn_text'] ?? 'Join the Movement';
+        $heroSecondaryLink = $homeContent['hero_secondary_btn_link'] ?? '#contact-cta';
+        $heroActivitiesCount = $homeContent['hero_activities_count'] ?? '';
+        $heroMembersCount = $homeContent['hero_active_members_count'] ?? '';
+        $heroYearsCount = $homeContent['hero_years_serving_count'] ?? '';
+        ?>
         <section id="home" class="home-hero">
-            <div class="hero-bg" style="background-image: url('assets/uploads/Logo/HeroSection3A.jpeg');"></div>
+            <div class="hero-bg" style="background-image: url('<?= e($heroBg) ?>');"></div>
             <div class="hero-overlay"></div>
             <div class="hero-overlay-2"></div>
             <div class="hero-shapes">
@@ -573,20 +593,20 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
                 <h3 class="hero-title"><?= $heroHeading ?></h3>
                 <p class="hero-sub"><?= e($heroDescription) ?></p>
                 <div class="hero-actions">
-                    <a href="activities.php" class="hero-btn-primary"><i class="fas fa-calendar-check"></i> View Our Activities</a>
-                    <a href="#contact-cta" class="hero-btn-secondary"><i class="fas fa-hand-holding-heart"></i> Join the Movement</a>
+                    <a href="<?= e($heroPrimaryLink) ?>" class="hero-btn-primary"><i class="fas fa-calendar-check"></i> <?= e($heroPrimaryText) ?></a>
+                    <a href="<?= e($heroSecondaryLink) ?>" class="hero-btn-secondary"><i class="fas fa-hand-holding-heart"></i> <?= e($heroSecondaryText) ?></a>
                 </div>
                 <div class="hero-stats">
                     <div class="hero-stat-item">
-                        <div class="hero-stat-num"><?= $totalEvents + $totalProjects ?></div>
+                        <div class="hero-stat-num"><?= $heroActivitiesCount !== '' ? e($heroActivitiesCount) : ($totalEvents + $totalProjects) ?></div>
                         <div class="hero-stat-label">Activities</div>
                     </div>
                     <div class="hero-stat-item">
-                        <div class="hero-stat-num"><?= $totalMembers ?></div>
+                        <div class="hero-stat-num"><?= $heroMembersCount !== '' ? e($heroMembersCount) : $totalMembers ?></div>
                         <div class="hero-stat-label">Active Members</div>
                     </div>
                     <div class="hero-stat-item">
-                        <div class="hero-stat-num">2026</div>
+                        <div class="hero-stat-num"><?= $heroYearsCount !== '' ? e($heroYearsCount) : '2026' ?></div>
                         <div class="hero-stat-label">Years Serving</div>
                     </div>
                 </div>
@@ -596,25 +616,33 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
             </div>
         </section>
 
+        <?php
+        $aboutImg = homeImg($homeContent['about_image'] ?? 'assets/uploads/Logo/areas-of-focus.jpeg');
+        $aboutBadge = $homeContent['about_badge'] ?? 'About Us';
+        $aboutHeading = $homeContent['about_heading'] ?? 'Who We Are';
+        $aboutQuote = $homeContent['about_quote_text'] ?? 'Together, we make the world a better place.';
+        $aboutBtnText = $homeContent['about_btn_text'] ?? 'Learn More';
+        $aboutBtnLink = $homeContent['about_btn_link'] ?? 'aboutus.php';
+        ?>
         <!-- ===== WHO WE ARE ===== -->
         <section id="about" class="py-12 md:py-16 bg-white">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
                 <div class="grid grid-cols-1 lg:grid-cols-2 gap-12 items-center fade-in-up">
                     <div class="relative">
                         <div class="about-img-wrap">
-                            <img src="assets/uploads/Logo/areas-of-focus.jpeg" alt="Rotary Club Mission" class="w-full h-[400px] lg:h-[500px] object-cover">
+                            <img src="<?= e($aboutImg) ?>" alt="Rotary Club Mission" class="w-full h-[400px] lg:h-[500px] object-cover">
                             <div class="about-img-accent"></div>
                         </div>
                     </div>
                     <div class="p-2">
-                        <div class="section-badge">About Us</div>
-                        <h2 class="section-title text-left !mb-0">Who We Are</h2>
+                        <div class="section-badge"><?= e($aboutBadge) ?></div>
+                        <h2 class="section-title text-left !mb-0"><?= e($aboutHeading) ?></h2>
                         <div class="section-line !mx-0 mb-6"></div>
                         <p class="text-base text-gray-600 mb-6 leading-relaxed"><?= e($aboutDescription ?: 'The Rotary Club of Virar is a dynamic collective of local professionals and leaders dedicated to serving humanity. We channel our passion into tangible action, focusing on sustainable projects that impact health, education, and community well-being right here in Virar and beyond.') ?></p>
                         <div class="about-quote mb-8">
-                            <p class="text-lg font-semibold leading-relaxed" style="color: var(--rotary-blue);">"Together, we make the world a better place."</p>
+                            <p class="text-lg font-semibold leading-relaxed" style="color: var(--rotary-blue);">"<?= e($aboutQuote) ?>"</p>
                         </div>
-                        <a href="aboutus.php" class="btn-primary"><i class="fas fa-arrow-right"></i> Learn More</a>
+                        <a href="<?= e($aboutBtnLink) ?>" class="btn-primary"><i class="fas fa-arrow-right"></i> <?= e($aboutBtnText) ?></a>
                     </div>
                 </div>
             </div>
@@ -630,42 +658,46 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
                 </div>
                 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-2">
                     <?php
-                    $areas = [
-                        ['icon' => 'fas fa-seedling', 'title' => 'Livelihood', 'desc' => 'Skills & economic empowerment', 'img' => 'assets/uploads/Logo/Livelihood.jpeg'],
-                        ['icon' => 'fas fa-graduation-cap', 'title' => 'Education', 'desc' => 'School kits & literacy programs', 'img' => 'assets/uploads/Logo/Education.jpeg'],
-                        ['icon' => 'fas fa-leaf', 'title' => 'Peace & Harmony', 'desc' => 'Promoting peace and understanding', 'img' => 'assets/uploads/Logo/Peace.jpeg'],
-                        ['icon' => 'fas fa-hand-holding-heart', 'title' => 'Community', 'desc' => 'Service above self in action', 'img' => 'assets/uploads/Logo/Community.jpeg'],
-                        ['icon' => 'fas fa-tint', 'title' => 'Water & Sanitation', 'desc' => 'Clean water for communities', 'img' => 'assets/uploads/Logo/Water.jpeg'],
-                        ['icon' => 'fas fa-leaf', 'title' => 'Environment', 'desc' => 'Tree plantation & green drives', 'img' => 'assets/uploads/Logo/Environment.jpeg'],
-                        ['icon' => 'fas fa-heartbeat', 'title' => 'Health', 'desc' => 'Medical camps & wellness drives', 'img' => 'assets/uploads/Logo/Health Logo.jpeg'],
-                    ];
-                    foreach ($areas as $area):
+                    $areaIcons = ['fas fa-seedling', 'fas fa-graduation-cap', 'fas fa-leaf', 'fas fa-hand-holding-heart', 'fas fa-tint', 'fas fa-leaf', 'fas fa-heartbeat'];
+                    $areaDefaultTitles = ['Livelihood', 'Education', 'Peace & Harmony', 'Community', 'Water & Sanitation', 'Environment', 'Health'];
+                    $areaDefaultDescs = ['Skills & economic empowerment', 'School kits & literacy programs', 'Promoting peace and understanding', 'Service above self in action', 'Clean water for communities', 'Tree plantation & green drives', 'Medical camps & wellness drives'];
+                    $areaDefaultImgs = ['assets/uploads/Logo/Livelihood.jpeg', 'assets/uploads/Logo/Education.jpeg', 'assets/uploads/Logo/Peace.jpeg', 'assets/uploads/Logo/Community.jpeg', 'assets/uploads/Logo/Water.jpeg', 'assets/uploads/Logo/Environment.jpeg', 'assets/uploads/Logo/Health Logo.jpeg'];
+                    for ($i = 1; $i <= 7; $i++):
+                        $aIcon = $homeContent['area_icon_' . $i] ?? $areaIcons[$i-1];
+                        $aTitle = $homeContent['area_title_' . $i] ?? $areaDefaultTitles[$i-1];
+                        $aDesc = $homeContent['area_desc_' . $i] ?? $areaDefaultDescs[$i-1];
+                        $aImg = homeImg($homeContent['area_image_' . $i] ?? $areaDefaultImgs[$i-1]);
                     ?>
                     <div class="area-card">
                         <div class="ac-img-wrap">
-                            <img src="<?= e($area['img']) ?>" alt="<?= e($area['title']) ?>" loading="lazy">
+                            <img src="<?= e($aImg) ?>" alt="<?= e($aTitle) ?>" loading="lazy">
                             <div class="ac-overlay">
-                                <h4><?= e($area['title']) ?></h4>
+                                <h4><?= e($aTitle) ?></h4>
                             </div>
                         </div>
                         <div class="ac-body text-center">
-                            <i class="<?= e($area['icon']) ?>" style="color:var(--rotary-yellow); font-size:1.2rem; margin-bottom:6px;"></i>
-                            <h3><?= e($area['title']) ?></h3>
-                            <p><?= e($area['desc']) ?></p>
+                            <i class="<?= e($aIcon) ?>" style="color:var(--rotary-yellow); font-size:1.2rem; margin-bottom:6px;"></i>
+                            <h3><?= e($aTitle) ?></h3>
+                            <p><?= e($aDesc) ?></p>
                         </div>
                     </div>
-                    <?php endforeach; ?>
+                    <?php endfor; ?>
                 </div>
             </div>
         </section>
 
+        <?php
+        $activitiesBadge = $homeContent['activities_badge'] ?? 'Featured';
+        $activitiesHeading = $homeContent['activities_heading'] ?? 'Featured Activities';
+        $activitiesDesc = $homeContent['activities_description'] ?? 'Discover our latest events, projects, and community drives making an impact.';
+        ?>
         <!-- ===== FEATURED ACTIVITIES ===== -->
         <section id="activities" class="py-12 md:py-16 bg-white">
             <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 fade-in-up">
                 <div class="section-title-wrap">
-                    <div class="section-badge">Featured</div>
-                    <h2 class="section-title">Featured Activities</h2>
-                    <p class="text-gray-500 mt-3 max-w-2xl mx-auto text-sm">Discover our latest events, projects, and community drives making an impact.</p>
+                    <div class="section-badge"><?= e($activitiesBadge) ?></div>
+                    <h2 class="section-title"><?= e($activitiesHeading) ?></h2>
+                    <p class="text-gray-500 mt-3 max-w-2xl mx-auto text-sm"><?= e($activitiesDesc) ?></p>
                     <div class="section-line"></div>
                 </div>
 
@@ -817,19 +849,36 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
             </div>
         </section>
 
+        <?php
+        $ctaBgImg = homeImg($homeContent['cta_bg_image'] ?? '');
+        $ctaBadge = $homeContent['cta_badge'] ?? 'Get Involved';
+        $ctaHeading = $homeContent['cta_heading'] ?? 'Join Hands. Spread Smiles. Make a Difference.';
+        $ctaDesc = $homeContent['cta_description'] ?? 'Be part of something bigger. Whether you volunteer, partner, or donate — every action creates lasting change.';
+        $ctaPrimaryText = $homeContent['cta_primary_btn_text'] ?? 'Contact Us';
+        $ctaPrimaryLink = $homeContent['cta_primary_btn_link'] ?? 'contact.php';
+        $ctaSecondaryText = $homeContent['cta_secondary_btn_text'] ?? 'Admin Login';
+        $ctaSecondaryLink = $homeContent['cta_secondary_btn_link'] ?? '#login-modal';
+        ?>
         <!-- ===== CTA SECTION ===== -->
         <section id="contact-cta" class="cta-section py-16 md:py-24">
+            <?php if ($ctaBgImg): ?>
+            <div class="absolute inset-0 bg-cover bg-center" style="background-image: url('<?= e($ctaBgImg) ?>'); opacity: 0.15;"></div>
+            <?php endif; ?>
             <div class="cta-shapes">
                 <div class="cta-shape cta-shape-1"></div>
                 <div class="cta-shape cta-shape-2"></div>
             </div>
             <div class="relative z-10 max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 text-center fade-in-up">
-                <div class="section-badge !bg-white/10 !text-yellow-400 !border !border-white/10">Get Involved</div>
-                <h2 class="text-3xl sm:text-4xl md:text-5xl font-extrabold text-white leading-tight mb-6 font-['Playfair_Display']">Join Hands. Spread Smiles. Make a Difference.</h2>
-                <p class="text-indigo-200 text-base max-w-2xl mx-auto mb-10">Be part of something bigger. Whether you volunteer, partner, or donate — every action creates lasting change.</p>
+                <div class="section-badge !bg-white/10 !text-yellow-400 !border !border-white/10"><?= e($ctaBadge) ?></div>
+                <h2 class="text-3xl sm:text-4xl md:text-5xl font-extrabold text-white leading-tight mb-6 font-['Playfair_Display']"><?= e($ctaHeading) ?></h2>
+                <p class="text-indigo-200 text-base max-w-2xl mx-auto mb-10"><?= e($ctaDesc) ?></p>
                 <div class="flex flex-col sm:flex-row justify-center space-y-4 sm:space-y-0 sm:space-x-6">
-                    <a href="contact.php" class="hero-btn-primary"><i class="fas fa-envelope"></i> Contact Us</a>
-                    <button onclick="openModal()" class="hero-btn-secondary"><i class="fas fa-lock"></i> Admin Login</button>
+                    <a href="<?= e($ctaPrimaryLink) ?>" class="hero-btn-primary"><i class="fas fa-envelope"></i> <?= e($ctaPrimaryText) ?></a>
+                    <?php if (str_starts_with($ctaSecondaryLink, '#')): ?>
+                    <button onclick="openModal()" class="hero-btn-secondary"><i class="fas fa-lock"></i> <?= e($ctaSecondaryText) ?></button>
+                    <?php else: ?>
+                    <a href="<?= e($ctaSecondaryLink) ?>" class="hero-btn-secondary"><i class="fas fa-lock"></i> <?= e($ctaSecondaryText) ?></a>
+                    <?php endif; ?>
                 </div>
             </div>
         </section>
@@ -853,50 +902,7 @@ if ($resM) { $totalMembers = (int)$resM->fetch_assoc()['c']; }
         </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="pt-12 fade-in-up" style="background-color: var(--rotary-blue);">
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 text-white">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-12 pb-10 border-b border-indigo-700">
-                <div>
-                    <div class="flex items-center space-x-3 mb-4">
-                        <div class="w-10 h-10 flex items-center justify-center" style="color: var(--rotary-yellow);">
-                            <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-full h-full object-contain rounded-full shadow-lg border-2 border-blue-900">
-                        </div>
-                        <span class="text-xl font-extrabold tracking-tight" style="color: white;">Rotary Club of Virar</span>
-                    </div>
-                    <p class="text-indigo-200 mb-4 text-sm">Committed to service above self, we unite local leaders to create lasting change and foster goodwill in our community.</p>
-                    <a href="aboutus.php" class="text-sm font-semibold hover:text-yellow-400 transition duration-300" style="color: var(--rotary-yellow);">Learn More &rarr; About Us</a>
-                </div>
-                <div>
-                    <h4 class="text-xl font-semibold mb-4 border-b border-yellow-500 inline-block pb-1">Quick Links</h4>
-                    <ul class="space-y-3 text-indigo-200">
-                        <li><a href="#home" class="hover:text-yellow-400 transition duration-150">Home</a></li>
-                        <li><a href="#about" class="hover:text-yellow-400 transition duration-150">About Us</a></li>
-                        <li><a href="activities.php" class="hover:text-yellow-400 transition duration-150">Our Activities</a></li>
-                        <li><a href="team.php" class="hover:text-yellow-400 transition duration-150">Our Team</a></li>
-                        <li><a href="#gallery" class="hover:text-yellow-400 transition duration-150">Media Gallery</a></li>
-                        <li><a href="#contact-cta" class="hover:text-yellow-400 transition duration-150">Contact Us</a></li>
-                        <li><a href="donate.php" target="_blank" class="hover:text-yellow-400 transition duration-150 animate-pulse">Donate</a></li>
-                    </ul>
-                </div>
-                <div>
-                    <h4 class="text-xl font-semibold mb-4 border-b border-yellow-500 inline-block pb-1">Get In Touch</h4>
-                    <ul class="space-y-3 text-indigo-200 mb-6 text-sm">
-                        <li class="flex items-start"><i class="fas fa-map-marker-alt mt-1 mr-3" style="color: var(--rotary-yellow);"></i> <?= CLUB_NAME ?>, <?= CLUB_ADDRESS ?></li>
-                        <li class="flex items-center"><i class="fas fa-envelope mr-3" style="color: var(--rotary-yellow);"></i> <?= CLUB_EMAIL ?></li>
-                        <li class="flex items-center"><i class="fas fa-phone mr-3" style="color: var(--rotary-yellow);"></i> <?= CLUB_PHONE ?></li>
-                    </ul>
-                    <div class="flex space-x-6 text-2xl">
-                        <a href="<?= CLUB_FACEBOOK_URL ?>" target="_blank" rel="noopener noreferrer" class="social-icon hover:scale-[1.1]" aria-label="Facebook"><i class="fab fa-facebook-f"></i></a>
-                        <a href="<?= CLUB_INSTAGRAM_URL ?>" target="_blank" rel="noopener noreferrer" class="social-icon hover:scale-[1.1]" aria-label="Instagram"><i class="fab fa-instagram"></i></a>
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="py-3 text-center text-sm font-medium" style="background-color: var(--rotary-yellow); color: var(--rotary-blue);">
-            &copy; <?= date('Y') ?> Rotary Club of Virar | Service Above Self
-        </div>
-    </footer>
+    <?php include 'includes/footer.php'; ?>
 
     <script>
         // --- Home Hero loaded class for bg zoom transition ---

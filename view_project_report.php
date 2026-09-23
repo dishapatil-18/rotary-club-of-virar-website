@@ -1,6 +1,16 @@
 <?php
 session_start();
 include 'includes/db_connect.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
+
+// Restrict to authorized admins only
+$allowedReportRoles = ['super_admin', 'President', 'Secretary', 'Treasurer'];
+if (!isset($_SESSION['admin_id']) || !isset($_SESSION['admin_role']) || !in_array($_SESSION['admin_role'], $allowedReportRoles)) {
+    header("Location: login.php");
+    exit;
+}
 
 $project_id = isset($_GET['id']) ? intval($_GET['id']) : 0;
 if (!$project_id) { header("Location: activities.php"); exit; }
@@ -60,8 +70,8 @@ $pageTitle = htmlspecialchars($project['title']) . ' - Project Report';
     <header class="bg-white shadow-sm sticky top-0 z-40">
         <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
             <div class="flex items-center gap-3">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary" class="w-9 h-9 rounded-full">
-                <span class="font-bold text-lg" style="color:var(--rotary-blue)">Rotary Club of Virar</span>
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?>" class="w-9 h-9 rounded-full">
+                <span class="font-bold text-lg" style="color:var(--rotary-blue)"><?= e($ws['website_name']) ?></span>
             </div>
             <a href="activities.php" class="back-link text-sm font-semibold flex items-center gap-1.5" style="color:var(--rotary-blue)">
                 <i data-lucide="arrow-left" class="w-4 h-4"></i> Back to Activities

@@ -10,7 +10,15 @@ if (!isset($_SESSION['admin_id'])) {
     exit;
 }
 
+// Role-based access: only Super Admin, President, Secretary, Treasurer
+$allowedRoles = ['super_admin', 'President', 'Secretary', 'Treasurer'];
+if (!isset($_SESSION['admin_role']) || !in_array($_SESSION['admin_role'], $allowedRoles)) {
+    header("Location: dashboard.php");
+    exit;
+}
+
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 
 // Helper: sanitize output
 function h($s) { return htmlspecialchars($s, ENT_QUOTES, 'UTF-8'); }
@@ -80,6 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_report'])) {
             $stmt->bind_param("iss", $donation_id, $report_summary, $verified_by);
             if ($stmt->execute()) {
                 $success = "Donation report saved successfully.";
+                logAudit($conn, 'Donations', 'Donation Report Added', 'Added donation report for donation #' . $donation_id . '.', 'INFO', 'success');
                 header("Location: donation_report_action.php?msg=" . urlencode($success));
                 exit;
             } else {
@@ -92,6 +101,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_report'])) {
             $stmt->bind_param("issi", $donation_id, $report_summary, $verified_by, $report_id);
             if ($stmt->execute()) {
                 $success = "Donation report updated.";
+                logAudit($conn, 'Donations', 'Donation Report Updated', 'Updated donation report ID ' . $report_id . '.', 'INFO', 'success');
                 header("Location: donation_report_action.php?msg=" . urlencode($success));
                 exit;
             } else {
@@ -112,6 +122,7 @@ if (isset($_GET['delete_report'])) {
         $stmt->bind_param("i", $rid);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Donations', 'Donation Report Deleted', 'Deleted donation report ID ' . $rid . '.', 'WARNING', 'success');
         header("Location: donation_report_action.php?msg=" . urlencode("Report deleted"));
         exit;
     }
@@ -156,7 +167,8 @@ while ($row = $res->fetch_assoc()) {
 $reportRows = [];
 $sql = "
     SELECT dr.report_id, dr.donation_id, dr.report_summary, dr.verified_by, dr.created_on,
-           d.donation_type, d.amount, d.date AS donation_date,
+           d.donation_type, d.amount, d.date AS donation_date, d.status AS current_status,
+           d.status_updated_by, d.status_updated_role, d.status_updated_at,
            dn.name AS donor_name, dn.phone_number, dn.email
     FROM donation_report dr
     JOIN donations d ON dr.donation_id = d.donation_id
@@ -165,6 +177,28 @@ $sql = "
 ";
 $res = $conn->query($sql);
 while ($r = $res->fetch_assoc()) $reportRows[] = $r;
+
+// Fetch all status history for displayed donations
+$historyByDonation = [];
+if (count($reportRows) > 0) {
+    $donationIds = array_unique(array_column($reportRows, 'donation_id'));
+    $idPlaceholders = implode(',', array_fill(0, count($donationIds), '?'));
+    $types = str_repeat('i', count($donationIds));
+    $hstmt = $conn->prepare("SELECT h.*, a.name AS admin_display_name 
+                             FROM donation_status_history h 
+                             LEFT JOIN admins a ON h.admin_id = a.admin_id 
+                             WHERE h.donation_id IN ($idPlaceholders) 
+                             ORDER BY h.updated_at ASC");
+    $hstmt->bind_param($types, ...$donationIds);
+    $hstmt->execute();
+    $hRes = $hstmt->get_result();
+    while ($hRow = $hRes->fetch_assoc()) {
+        $did = $hRow['donation_id'];
+        if (!isset($historyByDonation[$did])) $historyByDonation[$did] = [];
+        $historyByDonation[$did][] = $hRow;
+    }
+    $hstmt->close();
+}
 
 // Show messages if any
 if (isset($_GET['msg'])) $success = $_GET['msg'];
@@ -239,36 +273,69 @@ require __DIR__ . '/includes/admin_header.php';
         <div class="card-body">
 
             <div class="overflow-x-auto">
-                <table class="data-table">
+                <table class="data-table" id="report-table">
                     <thead>
                         <tr class="text-left">
                             <th>ID</th>
                             <th>Donor</th>
                             <th>Type</th>
                             <th>Amount (₹)</th>
+                            <th>Current Status</th>
+                            <th>Updated By</th>
+                            <th>Role</th>
+                            <th>Updated On</th>
                             <th>Report Summary</th>
                             <th>Verified By</th>
                             <th>Report Created On</th>
+                            <th class="text-center">Status History</th>
                             <th class="text-center">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (count($reportRows) === 0): ?>
-                            <tr><td class="p-4 text-center" colspan="8">No reports found.</td></tr>
+                            <tr><td class="p-4 text-center" colspan="13">No reports found.</td></tr>
                         <?php else: ?>
-                            <?php foreach ($reportRows as $row): ?>
-                                <tr class="align-top">
+                            <?php foreach ($reportRows as $row): 
+                                $did = (int)$row['donation_id'];
+                                $hist = $historyByDonation[$did] ?? [];
+                            ?>
+                                <tr class="align-top" data-donation-id="<?= $did ?>">
                                     <td><?= (int)$row['report_id'] ?></td>
 
                                     <!-- HIDDEN donation ID — kept only for reference -->
-                                    <td class="hidden"><?= (int)$row['donation_id'] ?></td>
+                                    <td class="hidden"><?= $did ?></td>
 
                                     <td><?= h($row['donor_name']) ?></td>
                                     <td><?= h($row['donation_type']) ?></td>
                                     <td>₹ <?= number_format((float)$row['amount'], 2) ?></td>
+                                    <td>
+                                        <?php
+                                        $sc = 'badge-gray';
+                                        $s = $row['current_status'] ?? '';
+                                        if ($s === 'Pending Verification') $sc = 'badge-yellow';
+                                        elseif ($s === 'Verified') $sc = 'badge-green';
+                                        elseif ($s === 'Contacted') $sc = 'badge-blue';
+                                        elseif ($s === 'Received') $sc = 'badge-purple';
+                                        elseif ($s === 'Completed') $sc = 'badge-green';
+                                        ?>
+                                        <span class="badge <?= $sc ?>"><?= h($s) ?></span>
+                                    </td>
+                                    <td><?= h($row['status_updated_by'] ?? '-') ?></td>
+                                    <td><?= h($row['status_updated_role'] ?? '-') ?></td>
+                                    <td><?= !empty($row['status_updated_at']) ? date('d M Y, h:i A', strtotime($row['status_updated_at'])) : '-' ?></td>
                                     <td><?= nl2br(h($row['report_summary'])) ?></td>
                                     <td><?= h($row['verified_by']) ?></td>
                                     <td><?= h($row['created_on']) ?></td>
+
+                                    <td class="text-center">
+                                        <?php if (count($hist) > 0): ?>
+                                        <button onclick="showHistory(<?= $did ?>)" class="btn btn-indigo btn-xs">
+                                            <i data-lucide="clock" class="w-3 h-3"></i> <?= count($hist) ?> updates
+                                        </button>
+                                        <?php else: ?>
+                                        <span class="text-gray-400 text-xs">—</span>
+                                        <?php endif; ?>
+                                    </td>
 
                                     <td class="text-center">
                                         <a href="?edit_report=<?= (int)$row['report_id'] ?>" class="btn btn-yellow btn-xs">Edit</a>
@@ -280,6 +347,83 @@ require __DIR__ . '/includes/admin_header.php';
                     </tbody>
                 </table>
             </div>
+
+            <!-- Status History Modal -->
+            <div id="history-modal" class="modal-overlay" onclick="if(event.target===this)closeHistory()">
+                <div class="modal-content" style="max-width:600px;">
+                    <div class="modal-header">
+                        <h2>Status History — Donation #<span id="history-donation-id"></span></h2>
+                        <button onclick="closeHistory()" class="modal-close" style="background:none;border:none;font-size:22px;cursor:pointer;color:#94a3b8;">&times;</button>
+                    </div>
+                    <div class="modal-body" id="history-modal-body">
+                        <div class="text-center text-gray-400 py-8">Loading...</div>
+                    </div>
+                    <div class="modal-footer">
+                        <button onclick="closeHistory()" class="btn btn-secondary">Close</button>
+                    </div>
+                </div>
+            </div>
+
+            <style>
+            .modal-overlay.open { display: flex !important; }
+            </style>
+
+            <script>
+            const historyData = <?= json_encode($historyByDonation) ?>;
+
+            function showHistory(donationId) {
+                const hist = historyData[donationId] || [];
+                document.getElementById('history-donation-id').textContent = donationId;
+
+                const statusColors = {
+                    'Pending Verification': '#f59e0b',
+                    'Verified': '#10b981',
+                    'Contacted': '#3b82f6',
+                    'Received': '#8b5cf6',
+                    'Completed': '#059669',
+                };
+
+                let html = '<div style="position:relative;padding-left:28px;">';
+                hist.forEach(function(h, idx) {
+                    const prevColor = statusColors[h.previous_status] || '#94a3b8';
+                    const newColor = statusColors[h.new_status] || '#94a3b8';
+                    const dispName = h.admin_display_name || h.admin_name || 'Website';
+                    const isLast = idx === hist.length - 1;
+
+                    if (!isLast) {
+                        html += '<div style="position:absolute;left:-16px;top:20px;bottom:0;width:2px;background:#e2e8f0;"></div>';
+                    }
+                    html += '<div style="position:relative;padding-bottom:' + (isLast ? '0' : '24px') + ';">';
+                    html += '<div style="position:absolute;left:-22px;top:4px;width:14px;height:14px;border-radius:50%;background:' + newColor + ';border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.15);"></div>';
+                    html += '<div style="font-size:13px;color:#334155;">';
+                    html += '<span style="font-weight:600;">' + (h.previous_status || 'Submitted') + '</span>';
+                    html += '<span style="color:#94a3b8;margin:0 6px;">→</span>';
+                    html += '<span style="font-weight:700;color:' + newColor + ';">' + h.new_status + '</span>';
+                    html += '</div>';
+                    html += '<div style="font-size:12px;color:#64748b;margin-top:2px;">';
+                    html += '<span>By: ' + dispName + '</span>';
+                    if (h.admin_role) {
+                        html += '<span style="margin-left:12px;">Role: ' + h.admin_role + '</span>';
+                    }
+                    html += '<span style="margin-left:12px;">' + new Date(h.updated_at).toLocaleString('en-IN', {day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit'}) + '</span>';
+                    html += '</div>';
+                    if (h.remarks) {
+                        html += '<div style="font-size:12px;color:#64748b;margin-top:2px;font-style:italic;">' + h.remarks + '</div>';
+                    }
+                    html += '</div>';
+                });
+                html += '</div>';
+
+                document.getElementById('history-modal-body').innerHTML = html;
+                document.getElementById('history-modal').classList.add('open');
+                document.body.style.overflow = 'hidden';
+            }
+
+            function closeHistory() {
+                document.getElementById('history-modal').classList.remove('open');
+                document.body.style.overflow = '';
+            }
+            </script>
         </div>
     </div>
 

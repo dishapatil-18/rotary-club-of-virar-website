@@ -10,6 +10,9 @@ if (!isset($_SESSION['admin_id'])) {
 }
 
 require __DIR__ . '/includes/db_connect.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
 $donation_id = isset($_GET['donation_id']) ? intval($_GET['donation_id']) : 0;
 if ($donation_id <= 0) {
@@ -65,9 +68,9 @@ $txref = "RCB-DON-" . str_pad($row['donation_id'], 5, "0", STR_PAD_LEFT);
   <div class="receipt">
     <div class="flex items-center justify-between mb-6">
       <div class="flex items-center space-x-3">
-        <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="h-12 w-12 rounded-full border-2 border-[#FFC000]">
+        <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="h-12 w-12 rounded-full border-2 border-[#FFC000]">
         <div>
-          <h1 class="text-2xl font-bold">Rotary Club of Virar</h1>
+          <h1 class="text-2xl font-bold"><?= e($ws['website_name']) ?></h1>
           <p class="muted">Donation Receipt</p>
         </div>
       </div>
@@ -132,7 +135,7 @@ $txref = "RCB-DON-" . str_pad($row['donation_id'], 5, "0", STR_PAD_LEFT);
 
     <section class="mb-6 muted">
       <p>Thank you for your generous support. This receipt confirms the donation recorded in our system.</p>
-      <p class="mt-2">All contributions to Rotary Club of Virar are eligible for 80G tax exemption under the Income Tax Act, 1961. For official registration & tax-exemption queries, contact the club admin.</p>
+      <p class="mt-2">All contributions to <?= e($ws['website_name']) ?> are eligible for 80G tax exemption under the Income Tax Act, 1961. For official registration & tax-exemption queries, contact the club admin.</p>
     </section>
 
     <div class="flex items-center justify-between">

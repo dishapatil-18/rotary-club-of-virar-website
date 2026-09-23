@@ -1,6 +1,33 @@
 <?php
 session_start();
 require 'includes/db_connect.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
+
+// Rotary Year logic
+$allYears = [];
+$yrRes = $conn->query("SELECT id, year_name, is_current FROM rotary_years ORDER BY year_name DESC");
+if ($yrRes) {
+    while ($y = $yrRes->fetch_assoc()) $allYears[] = $y;
+}
+$selectedYearId = null;
+$selectedYearName = '';
+if (!empty($_GET['ry'])) {
+    foreach ($allYears as $y) {
+        if ($y['id'] == $_GET['ry']) { $selectedYearId = $y['id']; $selectedYearName = $y['year_name']; break; }
+    }
+}
+if (!$selectedYearId) {
+    foreach ($allYears as $y) {
+        if ($y['is_current']) { $selectedYearId = $y['id']; $selectedYearName = $y['year_name']; break; }
+    }
+}
+if (!$selectedYearId && !empty($allYears)) {
+    $selectedYearId = $allYears[0]['id'];
+    $selectedYearName = $allYears[0]['year_name'];
+}
+$yearFilter = $selectedYearId ? " AND year_id = $selectedYearId" : '';
 
 $media = [];
 $sql = "SELECT
@@ -14,7 +41,7 @@ $sql = "SELECT
             uploaded_by,
             media_date
         FROM media_gallery
-        WHERE status = 'active'
+        WHERE status = 'active' $yearFilter
         ORDER BY reference_type, reference_id, media_id ASC";
 if ($res = $conn->query($sql)) {
     while ($row = $res->fetch_assoc()) {
@@ -52,7 +79,7 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rotary Club of Virar - Our Gallery</title>
+    <title><?= e($ws['website_name']) ?> - Our Gallery</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700;800;900&family=Playfair+Display:wght@700;800&display=swap" rel="stylesheet">
@@ -560,8 +587,8 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
     <header class="sticky top-0 z-40 bg-white shadow-md">
         <nav class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-3">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="w-10 h-10 rounded-full object-cover">
-                <span class="text-xl font-extrabold tracking-tight" style="color:var(--rotary-blue);">Rotary Club of Virar</span>
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="w-10 h-10 rounded-full object-cover">
+                <span class="text-xl font-extrabold tracking-tight" style="color:var(--rotary-blue);"><?= e($ws['website_name']) ?></span>
             </div>
             <div class="hidden lg:flex flex-1 justify-center space-x-8">
                 <a href="index.php" class="nav-link">Home</a>
@@ -604,8 +631,8 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
 
             <div class="relative z-10 text-center px-4 max-w-5xl mx-auto py-20 md:py-0">
                 <div class="hero-badge">
-                    <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" onerror="this.style.display='none'">
-                    <span>Rotary Club of Virar</span>
+                    <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?>" onerror="this.style.display='none'">
+                    <span><?= e($ws['website_name']) ?></span>
                 </div>
 
                 <h1 class="hero-title">
@@ -657,6 +684,16 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
                     <div class="section-badge">Our Gallery</div>
                     <h2 class="section-title">Moments That Matter</h2>
                     <div class="section-line"></div>
+                </div>
+
+                <!-- Rotary Year Selector -->
+                <div class="flex flex-col sm:flex-row items-center justify-center mb-8 space-y-4 sm:space-y-0 sm:space-x-4 fade-in-up">
+                    <label class="text-base font-semibold" style="color: var(--rotary-blue);">Select Rotary Year:</label>
+                    <select onchange="window.location.href='?ry='+this.value" class="px-4 py-2 rounded-full border-2 border-[var(--rotary-blue)] text-[var(--rotary-blue)] font-semibold bg-white cursor-pointer outline-none focus:border-[var(--rotary-yellow)] focus:shadow-[0_0_0_3px_rgba(255,192,0,0.2)] transition-all min-w-[180px] text-center">
+                        <?php foreach ($allYears as $y): ?>
+                        <option value="<?= $y['id'] ?>" <?= $y['id'] == $selectedYearId ? 'selected' : '' ?>><?= htmlspecialchars($y['year_name']) ?> <?= $y['is_current'] ? '(Current)' : '' ?></option>
+                        <?php endforeach; ?>
+                    </select>
                 </div>
 
                 <!-- Filter Tabs -->
@@ -845,14 +882,7 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
 
         let currentStack = [];
         let stackIndex = 0;
-        let currentFilteredData = galleryData;
         let touchStartX = 0;
-
-        // ==== CATEGORY COLORS ====
-        const catIcons = {
-            all: 'fa-th-large', event: 'fa-calendar-alt', project: 'fa-hands-helping',
-            announcement: 'fa-bullhorn', donation: 'fa-gift', other: 'fa-ellipsis-h'
-        };
 
         // ==== RENDER CARDS (GROUPED BY reference_id) ====
         function renderGallery(data) {
@@ -912,11 +942,11 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
             const activeBtn = document.querySelector(`.filter-btn[data-category="${category}"]`);
             if (activeBtn) activeBtn.classList.add('active');
 
-            currentFilteredData = category === 'all'
+            const filtered = category === 'all'
                 ? galleryData
                 : galleryData.filter(item => item.category === category);
 
-            renderGallery(currentFilteredData);
+            renderGallery(filtered);
         }
 
         // ==== OPEN STACK (FULLSCREEN GALLERY FOR A GROUP) ====
@@ -1085,6 +1115,7 @@ $grouped_json = json_encode($grouped, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UN
 
             // Initial render
             filterGallery('all');
+            document.getElementById('gallery-grid').classList.add('is-visible');
 
             // Filter button listeners
             document.querySelectorAll('.filter-btn').forEach(btn => {

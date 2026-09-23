@@ -1,6 +1,9 @@
 <?php
 session_start();
 include 'includes/db_connect.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
 // Handle AJAX form submission for collaborations
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'submit_collab') {
@@ -67,7 +70,7 @@ if ($res = $conn->query($sql)) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Our Projects Dashboard</title>
+    <title><?= e($ws['website_name']) ?> - Our Projects</title>
     <!-- Load Tailwind CSS --><script src="https://cdn.tailwindcss.com"></script>
     <!-- Load Lucide icons for clean UI elements --><script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
@@ -155,7 +158,7 @@ if ($res = $conn->query($sql)) {
      <header class="py-8 bg-gray-50"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 rounded-2xl shadow-xl bg-[var(--header-bg-color)] flex flex-col md:flex-row justify-between items-center text-white">
             <div class="flex items-center space-x-4 mb-4 md:mb-0">
                 <!-- keep your logo path as requested -->
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="h-16 w-16 rounded-full object-cover border-2 border-yellow-400">
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="h-16 w-16 rounded-full object-cover border-2 border-yellow-400">
                 <div>
                     <h1 class="text-4xl font-extrabold">Project Dashboard</h1>
                     <p class="mt-1 text-base text-gray-300">Explore our vision, mission, and current initiatives.</p>
@@ -347,7 +350,6 @@ if ($res = $conn->query($sql)) {
             </div>
 
             <div class="mt-6 flex gap-3">
-                <a id="detail-report-link" href="#" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-semibold hover:bg-indigo-700 transition inline-flex items-center gap-1.5"><i data-lucide="file-text" class="w-4 h-4"></i> View Full Report</a>
                 <button onclick="closeDetailPanel()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg">Close</button>
             </div>
         </div>
@@ -487,8 +489,6 @@ if ($res = $conn->query($sql)) {
             document.getElementById('detail-start').textContent = formatDate(project.startDate);
             document.getElementById('detail-end').textContent = formatDate(project.endDate);
             document.getElementById('detail-collab').textContent = project.collaborator || 'N/A';
-            document.getElementById('detail-report-link').href = 'view_project_report.php?id=' + project.id;
-
             detailPanel.classList.add('open');
             detailPanel.setAttribute('aria-hidden','false');
             // Lock body scroll

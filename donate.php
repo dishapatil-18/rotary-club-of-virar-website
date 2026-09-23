@@ -2,10 +2,11 @@
 session_start();
 require __DIR__ . '/includes/db_connect.php';
 require_once __DIR__ . '/config/club_settings.php';
+require_once __DIR__ . '/includes/helpers.php';
+require_once __DIR__ . '/includes/website_settings.php';
+$ws = getWebsiteSettings($conn);
 
 // ==================== CONFIGURABLE SETTINGS ====================
-// QR Code Image Path - replace the file at this path to update QR
-$qr_image_path = 'assets/images/donations/rotary_qr.png';
 // Bank Details
 $bank_account_name = 'Rotary Club of Virar';
 $bank_account_no   = '055100100002900';
@@ -124,6 +125,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $stmt->bind_param("issdsss", $donor_id, $donation_type, $description, $amount, $utr_number, $proof_path, $pickup_json);
         if ($stmt->execute()) {
             $donation_id = $conn->insert_id;
+            $hstmt = $conn->prepare("INSERT INTO donation_status_history (donation_id, previous_status, new_status, admin_id, admin_name, admin_role, remarks, updated_at) VALUES (?, NULL, 'Pending Verification', NULL, NULL, NULL, '', NOW())");
+            $hstmt->bind_param("i", $donation_id);
+            $hstmt->execute();
+            $hstmt->close();
             echo json_encode(['success' => true, 'donation_id' => $donation_id]);
         } else {
             echo json_encode(['success' => false, 'message' => 'Database error while saving donation.']);
@@ -141,7 +146,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Rotary Club Donation Portal</title>
+    <title><?= e($ws['website_name']) ?> - Donate</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
@@ -207,7 +212,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     <header class="py-8 bg-gray-50">
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 rounded-2xl shadow-xl bg-[var(--rotary-dark-blue)] flex flex-col md:flex-row justify-between items-center text-white">
             <div class="flex items-center space-x-4 mb-4 md:mb-0">
-                <img src="assets/uploads/Logo/rotary-icon.png" alt="Rotary Logo" class="h-16 w-16 rounded-full object-cover border-2 border-[var(--rotary-yellow)]">
+                <img src="<?= e($ws['website_logo']) ?>" alt="<?= e($ws['website_short_name']) ?> Logo" class="h-16 w-16 rounded-full object-cover border-2 border-[var(--rotary-yellow)]">
                 <div>
                     <h1 class="text-4xl font-extrabold">Donation Dashboard</h1>
                     <p class="mt-1 text-base text-gray-300">Contribute to make a lasting impact.</p>
@@ -394,27 +399,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     <!-- Payment Information Card -->
                     <div class="payment-card rounded-xl p-6 mb-6 shadow-md">
                         <h3 class="text-xl font-bold text-gray-800 mb-4 flex items-center">
-                            <i data-lucide="scan" class="w-5 h-5 mr-2 text-yellow-600"></i>
+                            <i data-lucide="landmark" class="w-5 h-5 mr-2 text-yellow-600"></i>
                             Complete Your Payment
                         </h3>
-                        <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 items-start">
-                            <div class="sm:col-span-1 flex justify-center">
-                                <img src="<?= htmlspecialchars($qr_image_path) ?>" alt="Rotary Club Payment QR"
-                                     class="rounded-lg border-4 border-white shadow-lg max-w-[180px]"
-                                     onerror="this.onerror=null; this.src='assets/images/logos/qr.png';">
+                        <div class="text-gray-700 space-y-3">
+                            <p class="font-bold text-lg text-[var(--rotary-blue)]"><?= htmlspecialchars($bank_account_name) ?></p>
+                            <div class="bg-white p-4 rounded-lg border border-yellow-200 text-sm space-y-2 shadow-sm">
+                                <p><span class="font-semibold">Account Name:</span> <?= htmlspecialchars($bank_account_name) ?></p>
+                                <p><span class="font-semibold">Account No.:</span> <span class="font-mono text-base font-bold text-[var(--rotary-blue)]"><?= htmlspecialchars($bank_account_no) ?></span></p>
+                                <p><span class="font-semibold">IFSC Code:</span> <span class="font-mono font-bold"><?= htmlspecialchars($bank_ifsc) ?></span></p>
+                                <p><span class="font-semibold">Bank:</span> <?= htmlspecialchars($bank_name) ?></p>
                             </div>
-                            <div class="sm:col-span-2 text-gray-700 space-y-3">
-                                <p class="font-bold text-lg text-[var(--rotary-blue)]"><?= htmlspecialchars($bank_account_name) ?></p>
-                                <div class="bg-white p-4 rounded-lg border border-yellow-200 text-sm space-y-2 shadow-sm">
-                                    <p><span class="font-semibold">Account Name:</span> <?= htmlspecialchars($bank_account_name) ?></p>
-                                    <p><span class="font-semibold">Account No.:</span> <span class="font-mono text-base font-bold text-[var(--rotary-blue)]"><?= htmlspecialchars($bank_account_no) ?></span></p>
-                                    <p><span class="font-semibold">IFSC Code:</span> <span class="font-mono font-bold"><?= htmlspecialchars($bank_ifsc) ?></span></p>
-                                    <p><span class="font-semibold">Bank:</span> <?= htmlspecialchars($bank_name) ?></p>
-                                </div>
-                                <div class="bg-green-50 p-3 rounded-lg border border-green-200 text-xs text-green-800">
-                                    <i data-lucide="badge-check" class="w-4 h-4 inline mr-1"></i>
-                                    All contributions are eligible for 80G tax exemption.
-                                </div>
+                            <div class="bg-blue-50 p-4 rounded-lg border border-blue-200 text-sm text-blue-800">
+                                <i data-lucide="info" class="w-4 h-4 inline mr-1"></i>
+                                Please transfer the donation to the above bank account and upload the payment screenshot for verification.
+                            </div>
+                            <div class="bg-green-50 p-3 rounded-lg border border-green-200 text-xs text-green-800">
+                                <i data-lucide="badge-check" class="w-4 h-4 inline mr-1"></i>
+                                All contributions are eligible for 80G tax exemption.
                             </div>
                         </div>
                     </div>
@@ -435,7 +437,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         <label class="flex items-start space-x-3 cursor-pointer">
                             <input type="checkbox" id="payment-confirm" class="mt-1 accent-yellow-500 w-5 h-5">
                             <span class="text-sm text-gray-700 font-medium">
-                                I confirm that I have completed the payment to Rotary Club of Virar. <span class="text-red-500">*</span>
+                                I confirm that I have completed the payment to <?= e($ws['website_name']) ?>. <span class="text-red-500">*</span>
                             </span>
                         </label>
                         <p id="confirm-error" class="text-red-500 text-sm mt-1 hidden">Please confirm that you have completed the payment.</p>
@@ -610,7 +612,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 </div>
                 <h3 class="text-3xl font-bold text-gray-800 mb-2">Thank You ❤️</h3>
                 <p class="text-gray-600 mb-6 leading-relaxed">
-                    Thank you for supporting Rotary Club Virar.<br><br>
+                    Thank you for supporting <?= e($ws['website_name']) ?>.<br><br>
                     Your donation request has been submitted successfully.<br><br>
                     Our team will review your details and contact you shortly.
                 </p>
@@ -753,7 +755,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             document.getElementById('non-monetary-fields').classList.toggle('hidden', isMoneyCategory);
 
             document.getElementById('step3-subtitle').textContent = isMoneyCategory
-                ? 'Enter the amount, transfer via QR/Bank, and upload the payment proof.'
+                ? 'Enter the amount, transfer to the bank account, and upload the payment proof.'
                 : 'Describe the items you wish to donate.';
 
             const hints = {
@@ -1076,5 +1078,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             updateIndicator(1);
         });
     </script>
+    <?php include 'includes/footer.php'; ?>
 </body>
 </html>

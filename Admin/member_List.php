@@ -10,6 +10,7 @@ if (!isset($_SESSION['admin_id'])) {
 }
 
 require __DIR__ . '/../includes/db_connect.php';
+require_once __DIR__ . '/../includes/audit_log.php';
 
 $editMode = false;
 $member_id = $name = $email = $phone = $address = $role = $status = $joined_date = "";
@@ -66,6 +67,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param("sssssss", $name, $email, $phone, $address, $role, $status, $joined_date);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Members', 'Member Added', 'Added member "' . $name . '".', 'INFO', 'success');
         echo "<script>alert('✅ Member added successfully!'); window.location.href='member_action.php';</script>";
         exit;
     }
@@ -77,6 +79,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $stmt->bind_param("sssssssi", $name, $email, $phone, $address, $role, $status, $joined_date, $id);
         $stmt->execute();
         $stmt->close();
+        logAudit($conn, 'Members', 'Member Updated', 'Updated member "' . $name . '" (ID ' . $id . ').', 'INFO', 'success');
         echo "<script>alert('✅ Member updated successfully!'); window.location.href='member_action.php';</script>";
         exit;
     }
@@ -91,6 +94,7 @@ if (isset($_GET['delete'])) {
     $stmt->bind_param("i", $delete_id);
     $stmt->execute();
     $stmt->close();
+    logAudit($conn, 'Members', 'Member Deleted', 'Deleted member ID ' . $delete_id . '.', 'WARNING', 'success');
     echo "<script>alert('🗑️ Member deleted successfully!'); window.location.href='member_action.php';</script>";
     exit;
 }
